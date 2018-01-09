@@ -10,6 +10,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+import click
+import re
 
 #############################################################
 # Functions
@@ -618,56 +620,6 @@ def chart_wrapper (Most_Recent_FY_Schedule, Most_Recent_Faculty, FYHistory, Most
     for program in programs:
         Create_Charts(Most_Recent_FY_Schedule, Most_Recent_Faculty, FYHistory, program, Most_Recent_Terms, Most_Recent_Path)
 
-#############################################################
-# Grab Data
-#############################################################
-#Create Fiscal Year data frames
-FY15_file = get_latest('W:\\csh\\Nursing\\Schedules\\2014-2015')
-FY15, FY15_Faculty = cat_sched(FY15_file)
-
-FY16_file = get_latest('W:\\csh\\Nursing\\Schedules\\2015-2016')
-FY16, FY16_Faculty = cat_sched(FY16_file)
-
-FY17_file = get_latest('W:\\csh\\Nursing\\Schedules\\2016-2017')
-FY17, FY17_Faculty = cat_sched(FY17_file)
-
-FY18_file = get_latest('W:\\csh\\Nursing\\Schedules\\2017-2018')
-FY18, FY18_Faculty = cat_sched(FY18_file)
-
-FY19_file = get_latest('W:\\csh\\Nursing\\Schedules\\2018-2019')
-FY19, FY19_Faculty = cat_sched(FY19_file)
-
-#Make List of dataframes
-FYHistory = [FY15, FY16, FY17, FY18, FY19]
-
-#Concatenate Recent FY Data
-FYConcat = pd.concat(FYHistory)
-
-#Read in term descriptions
-TermDescriptions = pd.read_excel('W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx', header=0, converters={'Term':str})
-
-#Set abbreviations for course types
-course_types_abbr = {'LEC': 'Lc',
-                     'LAB': 'Lb',
-                     'PRA': 'Pr',
-                     'COORD': 'Co'                     
-                     }
-
-#Set abbreviations for programs
-program_types_abbr = {'MENP': 'MENP at LPC',
-                     'RFU': 'MENP at RFU',
-                     'DNP': 'DNP',
-                     'RN to MS': 'RN to MS',
-                     None: 'All'
-                     }
-
-# FY 18
-chart_wrapper(FY18, FY18_Faculty, FYHistory, 'W:\\csh\\Nursing\\Schedules\\2017-2018')
-
-# FY 19
-chart_wrapper(FY19, FY19_Faculty, FYHistory, 'W:\\csh\\Nursing\\Schedules\\2018-2019')
-
-
 '''
 # With the function below, we iterate through all current faculty and 
 # output their schedule for the fiscal year given.
@@ -708,7 +660,114 @@ def output_faculty_schedule (current_faculty_df, FY_df, FY_year_list=None):
         # Write out to excel
         faculty_df.to_excel('{0}\\Tables\\{1}\\{2}.xlsx'.format(Path, Date, faculty), sheet_name='Workload Projection')
 
-output_faculty_schedule(FY18_Faculty, FYConcat, FY_year_list=["FY '18"])
+#############################################################
+# Main Function Call
+#############################################################
+@click.command()
+@click.option(
+        '--fy',
+        help='Fiscal Year for which to run charting',
+)
+def main(fy):
+    '''Main function.'''
+    
+    # Path to schedules
+    sched_path = 'W:\\csh\\Nursing\\Schedules\\'
+    
+    # Set as global variables (used by many charts)
+    global TermDescriptions
+    global course_types_abbr
+    global program_types_abbr
+    
+    #Read in term descriptions
+    TermDescriptions = pd.read_excel('W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx', header=0, converters={'Term':str})
+    # Simplify years for easier access
+    years = TermDescriptions[['Academic Year', 'Fiscal Year']]
+    years.drop_duplicates(subset=['Fiscal Year'], keep='first', inplace=True)
+    
+    #Set abbreviations for course types
+    course_types_abbr = {'LEC': 'Lc',
+                         'LAB': 'Lb',
+                         'PRA': 'Pr',
+                         'COORD': 'Co'                     
+                         }
+    
+    #Set abbreviations for programs
+    program_types_abbr = {'MENP': 'MENP at LPC',
+                         'RFU': 'MENP at RFU',
+                         'DNP': 'DNP',
+                         'RN to MS': 'RN to MS',
+                         None: 'All'
+                         }
+    
+    
+    
+    # Create a dictionary to store data temporarily
+    sched_dict = {}
+    
+    # If user supplies a specific Fiscal Year
+    if fy:
+        # Ensure that fiscal year follows appropriate formatting
+        if re.match(r"\d{2}", fy):
+            fy = "FY '" + str(fy)
+        elif re.match(r"'\d{2}", fy):
+            fy = "FY " + fy
+        elif re.match(r"FY '\d{2}", fy):
+            pass
+        else:
+            raise Exception("Fiscal Year must be in appropriate format, e.g. FY '18.")
+        # Determine academic year from fiscal year
+        try:
+            ay = years[years['Fiscal Year'] == fy]['Academic Year'].item()
+        except:
+            print("Must provide a valid Fiscal Year")
+        
+    # If user does not supply Fiscal Year as an argument...
+    else:        
+        # Get all directories that match regex
+        subfolders = [f.name for f in os.scandir('W:\\csh\\Nursing\\Schedules') if f.is_dir() and re.match(r'\d{4}-\d{4}', f.name)]
+        # Sort the directories
+        subfolders.sort()
+        # Assume correct academic year is the last one
+        ay = subfolders[-1]
+        # Determine fiscal year from academic year
+        fy = years[years['Academic Year'] == ay]['Fiscal Year'].item()
+        
+    # Collect data
+    # Convert fy to integer for mathematical checks
+    fy_int = int(fy[-2:])
+    counter = 0
+    # The lowest FY for which data is available is FY '15
+    while fy_int >= 15 and counter <= 5:
+        # Create nested dictionary
+        sched_dict[fy] = {}
+        # Build a temporary path to the schedule
+        sched_dict[fy]['folder'] = sched_path + ay
+        # Get the latest build of the schedule document
+        sched_dict[fy]['file_path'] = get_latest(sched_dict[fy]['folder'])
+        # Get the schedule and faculty data
+        sched_dict[fy]['schedule'], sched_dict[fy]['faculty'] = cat_sched(sched_dict[fy]['file_path'])
+        # Increment Fiscal Year and counter
+        fy_int -= 1
+        counter += 1
+        # update fy and ay
+        fy = "FY '" + str(fy_int)
+        ay = years[years['Fiscal Year'] == fy]['Academic Year'].item()
+    
+    # Gather a sorted list of fiscal years
+    fiscal_years = list(sched_dict.keys())
+    fiscal_years.sort()
+    
+    #Make List of dataframes
+    FYHistory = [sched_dict[x]['schedule'] for x in fiscal_years]
+        
+    #Concatenate Recent FY Data
+    FYConcat = pd.concat(FYHistory)
+        
+    # Output charts and faculty schedule for highest two fiscal years
+    for year in fiscal_years[-2:]:
+        chart_wrapper(sched_dict[year]['schedule'], sched_dict[year]['faculty'], FYHistory, sched_dict[year]['folder'])
+        output_faculty_schedule(sched_dict[year]['faculty'], FYConcat, FY_year_list=[year])
 
-
-
+if __name__ == "__main__":
+    main()
