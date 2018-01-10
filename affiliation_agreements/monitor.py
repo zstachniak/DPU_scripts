@@ -224,7 +224,7 @@ request_types = {'Student': 2,
                 'Faculty / Staff': 1}
 request_status = {'Student': 1,
                   'Faculty / Staff': 4}
-request_param_list = ('Requester_Last_Name','Requester_First_Name','Requester_ID','Requester_Email','Program','Course','Needed_By','Date_Submitted','Survey_ID','Preceptor_Last_Name','Preceptor_First_Name','Preceptor_Credentials','Preceptor_Email','Preceptor_Phone','Preceptor_License_Number','Preceptor_License_State','Site','Address_1','Address_2','City','State','Zip_Code','Request_Type', 'Status')
+request_param_list = ('Requester_Last_Name','Requester_First_Name','Requester_ID','Requester_Email','Program','Course','Needed_By','Date_Submitted','Survey_ID','Preceptor_Last_Name','Preceptor_First_Name','Preceptor_Credentials','Preceptor_Email','Preceptor_Phone','Preceptor_License_Number','Preceptor_License_State','Site','Address_1','Address_2','City','State','Zip_Code','Site_Contact', 'Request_Type', 'Status')
 
 sub_fail = "Unfortunately, I failed to successfully add the request to the ARC database. I have copied Zander so that he can figure out where I've gone wrong. In the meantime, you can manually add this request. :("
 sub_success = "I successfully added the request to the ARC database!"
