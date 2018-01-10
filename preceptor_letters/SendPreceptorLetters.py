@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Jun 16 14:49:40 2017
-
-@author: astachn1
-"""
-
-# -*- coding: utf-8 -*-
-"""
 Created on Thu Mar 16 09:44:10 2017
 
 @author: astachn1
+
+Unfortunately, DePaul's security policies prevent this from being as good
+a script as it could be. Specifically, DePaul sets the McAfee Virus Scan to
+default block all attempts to access port 587 for smtp email, meaning it's
+impossible to even connect to the DPU server (or any server). There's no way
+to change the McAfee settings either, as they're locked down. Having Python
+directly control Outlook through the win32 client used to work very well,
+but they've recently added protection which now requires you to press "Allow"
+every time the program attempts to send an email. That security setting is
+also locked. So, this script suffers.
 """
 
 import os
@@ -220,8 +223,9 @@ def save_email (folder, save_path, title):
     '''Saves the last email in a particular folder.
     Additional documentation: https://msdn.microsoft.com/en-us/library/microsoft.office.interop.outlook.mailitem_methods.aspx
     '''
+    email_address = os.getlogin() + "@depaul.edu"
     outlook = win32.Dispatch('outlook.application').GetNamespace("MAPI")
-    inbox = outlook.Folders("astachn1@depaul.edu").Folders(folder)
+    inbox = outlook.Folders(email_address).Folders(folder)
     messages = inbox.Items
     message = messages.GetLast()
     test_path(save_path)
