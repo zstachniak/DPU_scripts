@@ -26,7 +26,6 @@ import pyodbc
 from fuzzywuzzy import fuzz, process
 import click
 import openpyxl
-from openpyxl.styles import NamedStyle
 
 #############################################################
 # Functions
@@ -271,8 +270,6 @@ def save_excel_changes (file):
         if sheet.cell(row=rowNum, column=colNum_email).value in jobs_completed:
             # Write today's date
             sheet.cell(row=rowNum, column=colNum_sent).value = today
-            date_style = NamedStyle(name='datetime', number_format='MM/DD/YYY')
-            sheet.cell(row=rowNum, column=colNum_sent).style = date_style
     # Save workbook
     wb.save(file)
 
