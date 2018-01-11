@@ -8,9 +8,10 @@ Created on Tue Aug 22 14:27:05 2017
 import win32com.client as win32
 import sqlite3
 from sqlite3 import OperationalError
-from datetime import datetime
+from datetime import datetime, timedelta
 import pyodbc
 import sys
+import os
 
 '''////////////////////////////////////////////////////////////
 // Functions.                                                //
@@ -172,40 +173,14 @@ def get_latest_successful_run (cursor):
     cursor.execute(ssql)
     return cursor.fetchone()[0]
 
-def process_updates (cursor, most_recent_notification):
-    '''Sends email to update faculty of the progress of their requests.'''
-    ssql = "SELECT * FROM Request_Status_Route_Table WHERE Route_Date >= ?"
-    cursor.execute(ssql, most_recent_notification)
-    # Fetch all recent updates
-    rows = cursor.fetchall()
-    # Iterate through updates
-    for row in rows:
-        request_id = row[1]
-        status = row[2]
-        route_date = row[3]
-        # Get additional information from Requests
-        ssql = "SELECT Requester_First_Name, Requester_Email, Site, Request_Type FROM Requests WHERE ID = ?"
-        cursor.execute(ssql, request_id)
-        [requester_first_name, requester_email, requester_site, request_type] = cursor.fetchone()
-        # If the request originated from a faculty member, update progress
-        if request_type == 1:
-            # Prepare email
-            subject = 'Agreement Request Update'
-            body = """Dear {0},
-On {1}, your affiliation agreement request for {2} was routed forward to stage: {3}.
-Sincerely,
-@alex
-Digital Personal Assistant""".format(requester_first_name, route_date, requester_site, request_route_stages[status])
-            # Send email
-            send_email(requester_email, subject, body, Cc='pbaclaws@depaul.edu')
-
 '''////////////////////////////////////////////////////////////
 // Hardcoded information.                                    //
 ////////////////////////////////////////////////////////////'''
 application = 'outlook.application'
 namespace='MAPI'
 folder = 'Automation'
-user = 'astachn1@depaul.edu'
+#user = 'astachn1@depaul.edu'
+user = os.getlogin() + "@depaul.edu"
 dpu_credential = '/O=DEPAUL'
 database = 'W:\\csh\\Nursing\\Agreement Request Center (ARC)\\Scripts\\monitor.db'
 request_table = 'request_log'
@@ -237,12 +212,15 @@ request_route_stages = {1: 'Open', 2: 'Closed', 3: 'Processing', 4: 'Intake', 5:
 # Open connection
 conn = sqlite3.connect(database)
 cursor = conn.cursor()
+# Access
+cnxn = pyodbc.connect(access_conn_str)
+crsr = cnxn.cursor()
 
 '''////////////////////////////////////////////////////////////
 // Send weekly report, if necessary.                         //
 ////////////////////////////////////////////////////////////'''
 
-'''
+
 # Get the current date and time
 now = datetime.now()
 # Get last report
@@ -256,8 +234,30 @@ if now - last_report >= 7:
                send_table,
                [now.strftime('%Y-%m-%d %H-%M-%S'),
                 'Weekly Report'])
-'''
+
+sql = "SELECT * FROM request_log"
+sql = "SELECT * FROM send_log"
+sql = "SELECT * FROM run_status"
+cursor.execute(sql)
+cursor.fetchall()
     
+get_latest_successful_run (cursor)
+    
+
+one_week_ago = datetime.now() - timedelta(days=7)
+
+sql = "SELECT * FROM run_status WHERE run_status != 1"
+cursor.execute(sql)
+temp = cursor.fetchall()
+
+failures = []
+for f in temp:
+    t = datetime.strptime(f[0], '%Y-%m-%d %H:%M:%S.%f')
+    if t > one_week_ago:
+        failures.append(f)
+
+
+
 '''////////////////////////////////////////////////////////////
 // OUTER PROGRAM LOOP.                                       //
 ////////////////////////////////////////////////////////////'''
@@ -286,9 +286,6 @@ try:
         if message.Subject == '@alex: New Request':
             request_dict = determine_request_fields(message.Body)
             # Upload request to access database
-            # Connect and open cursor
-            cnxn = pyodbc.connect(access_conn_str)
-            crsr = cnxn.cursor()
             try:
                 submit_request_to_access_db(request_dict, crsr, cnxn)
                 recipient, subject, body = build_email(request_dict, sub_success)
@@ -307,13 +304,6 @@ try:
         
         # Loop through messages until hit the last_id
         message = messages.GetPrevious()
-    
-    '''////////////////////////////////////////////////////////////
-    // Send notifications for updates since last successful run. //
-    ////////////////////////////////////////////////////////////'''
-    # Get last successful run
-    last_success = get_latest_successful_run(cursor)
-    process_updates(crsr, last_success)
     
     # Log a successful run
     log_run_status(cursor, datetime.now(), 1, '')
