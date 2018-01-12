@@ -114,7 +114,7 @@ def get_cln (starting_path, term):
     folder = os.path.join(starting_path, ay, q)
     file = get_latest(folder, 'Clinical Roster')
     # Read data
-    clinical_roster = pd.read_excel(file, header=0, converters={'Term':str, 'Cr':str, 'Empl ID':str, 'Hours':str})
+    clinical_roster = pd.read_excel(file, header=0, converters={'Term':str, 'Cr':str, 'Student ID':str})
     return clinical_roster
 
 def get_schedule (starting_path, term):
@@ -199,7 +199,7 @@ compliant_prev = pd.read_csv(files['compliant_prev'], header=0, converters={'Ord
 
 # Get the latest student list
 students = pd.read_excel(files['students'], header=0, converters={'Emplid':str, 'Admit Term':str, 'Latest Term Enrl': str, 'Run Term': str,})
-students.drop_duplicates(subset='Email', inplace=True)
+students.drop_duplicates(subset='Emplid', inplace=True)
 # Get the faculty list
 faculty = pd.read_excel(files['faculty'], header=0, converters={'Empl ID': str,})
 # Get term descriptions
@@ -309,24 +309,125 @@ def match_student (row):
     except:
         # Second, try a true match of first and last name
         try:
-            Emplid = students[(students['Last Name'] == row['Last Name']) & (students['First Name'] == row['First Name'])]['Emplid'].item()
+            Emplid = students[(students['Last Name'].lower() == row['Last Name'].lower()) & (students['First Name'].lower() == row['First Name'].lower())]['Emplid'].item()
         except:
             Emplid = None
     return Emplid
     
     
-    
 
     
-q['Emplid'] = q.apply(match_student, axis=1)
+
 
         
 q = pd.concat([t, u])
 q = q[['First Name', 'Last Name', 'Email Address']]
-q.drop_duplicates(inplace=True)
+q.drop_duplicates(subset=['Email Address'], inplace=True)
+q['Emplid'] = q.apply(match_student, axis=1)
 
 
 
+
+
+cln_ids = clinical_roster['Student ID'].unique()
+
+
+def check_clinical (row):
+    if row['Emplid'] in cln_ids:
+        return True
+    else:
+        return False
+    
+    try:
+        #site = clinical_roster[clinical_roster['Student ID'] == row['Emplid']]['Clinical Site'].item()
+        site = clinical_roster.loc[clinical_roster['Student ID'] == row['Emplid'], 'Clinical Site'].values
+        return site
+    except:
+        pass
+
+
+test = students.copy(deep=True)
+test['cln'] = test.apply(check_clinical, axis=1)
+
+test2 = test[test['cln'] == True]
+
+
+
+
+all_student_trackers = [x for x in all_trackers if 'DE34' not in x]
+
+t = compliant_curr[compliant_curr['To-Do List Name'].isin(all_student_trackers)]
+u = noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(all_student_trackers)]
+
+q = pd.concat([t, u])
+q['Emplid'] = q.apply(match_student, axis=1)
+
+
+def check_compliance (row):
+    if row['Emplid'] in q['Emplid']:
+        result = q[(q['Emplid'] == row['Emplid']) & (q['To-Do List Name'].isin(student_trackers)) & (~q['To-Do List Status'].isin(['Compliant', 'Complete']))]
+        if not result.empty:
+            status = 'Noncompliant'
+            num_reqs_due = result['Number of Requirements Incomplete']
+            reqs_due = result['Requirements Incomplete']
+        else:
+            result = q[(q['Emplid'] == row['Emplid']) & (q['To-Do List Name'].isin(student_trackers)) & (q['To-Do List Status'].isin(['Compliant', 'Complete']))]
+        if not result.empty:
+            status = 'Compliant'
+            num_reqs_due = 0
+            reqs_due = 'N/A'
+        else:
+            result = q[(q['Emplid'] == row['Emplid']) & (q['To-Do List Name'].isin(dna_trackers))]
+        if not result.empty:
+            status = 'Noncompliant'
+            num_reqs_due = 1
+            reqs_due = 'Never set up health requirement tracker'
+    else:
+        status = 'Unknown'
+        num_reqs_due = 1
+        reqs_due = 'Locate tracker'
+        
+    return pd.Series({'Status': status, 'Num Reqs Due': num_reqs_due, 'Reqs Due': reqs_due})
+        
+    
+test2[['Status', 'Num Reqs Due', 'Reqs Due']] = test2.apply(check_compliance, axis=1)
+
+import dpu
+
+
+# some_file.py
+import sys
+sys.path.insert(0, '..\\dpu')
+
+import dpu
+
+
+
+
+stuff = clinical_roster[clinical_roster['Student ID'] == '0695385']['Clinical Site']
+stuff = clinical_roster[clinical_roster['Student ID'] == '1824625']['Clinical Site']
+
+
+
+'''
+start with student list
+
+ask if student is in clinical 
+    gather this data
+    
+if not in clinical, ignore?
+
+if in clinical:
+    check if non-compliant
+    
+    if not, check if compliant
+    
+    if not, check if D & A
+    
+    if not, raise flag?
+
+
+'''
 
 
 
