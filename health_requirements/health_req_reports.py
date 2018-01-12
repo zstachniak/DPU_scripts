@@ -6,6 +6,7 @@ Created on Thu Jan 11 09:23:14 2018
 """
 
 import pandas as pd
+import numpy as np
 import os
 from datetime import datetime
 from fuzzywuzzy import fuzz, process
@@ -76,28 +77,30 @@ def get_latest (pathname, filename, **kwargs):
 def guess_current_term ():
     '''A function that uses the current date to estimate what the current
     academic term should be. Assumes the following cross-over points:
-    1/1 - winter
+    12/1 - winter
     3/25 - spring
-    6/15 - summer
+    6/10 - summer
     9/1 - fall
     '''
     # Get the current date and year
     today = datetime.today()
     current_year = today.year
     # Determine which cross-over points have been reached to assign quarter
-    if today > datetime(current_year, 9, 1):
+    # For end of year dates, we increment year by one to reach correct ay
+    if today > datetime(current_year, 12, 1):
+        quarter = 'Winter'
+        current_year += 1
+    elif today > datetime(current_year, 9, 1):
         quarter = 'Autumn'
-    elif today > datetime(current_year, 6, 15):
+        current_year += 1
+    elif today > datetime(current_year, 6, 10):
         quarter = 'Summer'
     elif today > datetime(current_year, 3, 25):
         quarter = 'Spring'
     else:
         quarter = 'Winter'
     # Assign academic year from current year + quarter
-    if quarter == 'Autumn':
-        ay = f'{current_year}-{current_year + 1}'
-    else:
-        ay = f'{current_year - 1}-{current_year}'
+    ay = f'{current_year - 1}-{current_year}'
     # Get current term from TermDescriptions
     term = TermDescriptions[(TermDescriptions['Academic Year'] == ay) & (TermDescriptions['Quarter'] == quarter)]['Term'].item()
     return term
@@ -179,35 +182,72 @@ files = {'students': get_latest(folders['students'], 'Student List'),
          }
 
 
-
+to_datetime = lambda d: datetime.strptime(d, '%m/%d/%Y')
 
 # Get the two most recent reports
-noncompliant_curr = pd.read_csv(files['noncompliant_curr'], header=0)
-noncompliant_prev = pd.read_csv(files['noncompliant_prev'], header=0)
-# Get a change-file
-nomcompliant_chng = pd.concat([noncompliant_curr, noncompliant_prev], ignore_index=True)
-nomcompliant_chng.drop_duplicates(inplace=True, keep=False)
+noncompliant_curr = pd.read_csv(files['noncompliant_curr'], header=0, converters={'Order Submission Date': to_datetime})
+noncompliant_prev = pd.read_csv(files['noncompliant_prev'], header=0, converters={'Order Submission Date': to_datetime})
+# Get a change log
+changelog = pd.merge(noncompliant_curr, noncompliant_prev, on=noncompliant_curr.columns.tolist(), how='outer', indicator=True).query("_merge != 'both'").drop('_merge', 1)
 
 
 
 
-compliant_curr = pd.read_excel(files['compliant_curr'], header=0)
-compliant_prev = pd.read_excel(files['compliant_prev'], header=0)
+compliant_curr = pd.read_csv(files['compliant_curr'], header=0, converters={'Order Submission Date': to_datetime, 'Date of Compliance': to_datetime})
+compliant_prev = pd.read_csv(files['compliant_prev'], header=0, converters={'Order Submission Date': to_datetime, 'Date of Compliance': to_datetime})
 
 
 # Get the latest student list
 students = pd.read_excel(files['students'], header=0, converters={'Emplid':str, 'Admit Term':str, 'Latest Term Enrl': str, 'Run Term': str,})
+students.drop_duplicates(subset='Email', inplace=True)
 # Get the faculty list
 faculty = pd.read_excel(files['faculty'], header=0, converters={'Empl ID': str,})
 # Get term descriptions
 TermDescriptions = pd.read_excel(files['terms'], header=0, converters={'Term':str})
+# Get current term
+current_term = guess_current_term()
+# Get clinical roster and schedule
+clinical_roster = get_cln (folders['clinical'], current_term)
+schedule = get_schedule (folders['schedule'], current_term)
 
 
 
-# combine with indicator
-test = pd.merge(noncompliant_curr, noncompliant_prev, on=noncompliant_curr.columns.tolist(), how='outer', indicator=True)
-# Can keep both, left_only, or right_only
-test = test.query("_merge == 'both'").drop('_merge', 1)
+student_trackers = [x for x in compliant_curr['To-Do List Name'].unique() if 'DE69' in x and 'Disclosure & Authorization' not in x]
+faculty_trackers = [x for x in compliant_curr['To-Do List Name'].unique() if 'DE69' in x and 'Disclosure & Authorization' not in x]
+
+
+all_trackers = np.concatenate((compliant_curr['To-Do List Name'].unique(), noncompliant_curr['To-Do List Name'].unique()))
+all_trackers = np.unique(all_trackers)
+
+
+
+dna_trackers = []
+student_trackers = []
+faculty_trackers = []
+for tracker in all_trackers:
+    if 'Disclosure & Authorization' in tracker:
+        dna_trackers.append(tracker)
+    elif 'DE34' in tracker:
+        faculty_trackers.append(tracker)
+    elif 'DE69' in tracker:
+        student_trackers.append(tracker)
+
+student_trackers = [x for x in all_trackers if 'DE34' not in x]
+
+
+
+
+
+
+
+
+
+t = compliant_curr[compliant_curr['To-Do List Name'].isin(student_trackers)]
+u = noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(student_trackers)]
+
+
+q = pd.concat([t, u])
+q[q.duplicated(subset=['Email Address'], keep=False)]
 
 
 
@@ -220,13 +260,103 @@ test = test.query("_merge == 'both'").drop('_merge', 1)
 
 
 
-# Grab most recent clinical roster
-    # Determine the term
-    # also grab previous clinical roster
 
 
 
-# Grab schedules specifically for the current and previous term
+
+
+
+
+# Sort by To-Do List and then by Order Submission Date
+q.sort_values(by=['To-Do List Status', 'Order Submission Date'], ascending=False, inplace=True)
+# In case of duplicates, first we would drop "compliant"
+# Second we would drop the least recent order
+q.drop_duplicates(subset=['Email Address'], keep='first', inplace=True)
+
+
+
+test = pd.merge(students, q, how='left', left_on='Email', right_on='Email Address')
+
+
+# do a merge on email address
+
+test = pd.merge(students, t, how='left', left_on='Email', right_on='Email Address')
+
+test = pd.merge(test, u, how='left', left_on='Email', right_on='Email Address')
+
+
+test[test.duplicated(subset=['Emplid'], keep=False)]
+
+
+
+# try merging by email
+# then try matching by email with just D & A
+# if still none, try matching with fuzzywuzzy
+
+e = 'leanderson8@outlook.com'
+e = 'christinebalderas91@gmail.com'
+
+matches = q[q['Email Address'] == e]
+
+
+students[students['Email'] == e]['Emplid'].item()
+
+def match_student (row):
+    '''docstring'''
+    # First, try a true match of email address
+    try:
+        Emplid = students[students['Email'] == row['Email Address']]['Emplid'].item()
+    except:
+        # Second, try a true match of first and last name
+        try:
+            Emplid = students[(students['Last Name'] == row['Last Name']) & (students['First Name'] == row['First Name'])]['Emplid'].item()
+        except:
+            Emplid = None
+    return Emplid
+    
+    
+    
+
+    
+q['Emplid'] = q.apply(match_student, axis=1)
+
+        
+q = pd.concat([t, u])
+q = q[['First Name', 'Last Name', 'Email Address']]
+q.drop_duplicates(inplace=True)
+
+
+
+
+
+
+
+
+    
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     
 
 
@@ -256,14 +386,7 @@ test = test.query("_merge == 'both'").drop('_merge', 1)
 
 
 
-current_term = guess_current_term()
-prev_term = str(int(current_term) - 5)
 
-
-
-
-clinical_roster = get_cln (folders['clinical'], current_term)
-schedule = get_schedule (folders['schedule'], current_term)
 
 
 

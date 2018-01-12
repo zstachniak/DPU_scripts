@@ -15,7 +15,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 from scipy import stats
 
-IL_Competitors = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\\Illinois Yearly Pass Rates for All Schools\\CompetitorPassRates.xlsx', sheetname='Sheet1', header=0)
+IL_Competitors = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\\Illinois Yearly Pass Rates for All Schools\\CompetitorPassRates.xlsx', sheet_name='Sheet1', header=0)
 
 school_abbr = {'DePaul University': 'DPU',
                'Millikin University': 'Mlkn',
@@ -44,7 +44,7 @@ NCLEX = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\DataWar
 #Fill first zero where needed
 NCLEX['Empl ID'] = NCLEX['Empl ID'].str.zfill(7)
 #Drop unnecessary fields
-NCLEX.drop(['Last Name','First Name','DOB','In-Out','Time Delivered', 'Test Center', 'Candidate ID'],axis=1,inplace=True)
+NCLEX.drop(['Last Name','First Name','Time Delivered', 'Candidate ID'],axis=1,inplace=True)
 #Add days elapsed since graduation
 NCLEX['Date Delivered'] = pd.to_datetime(NCLEX['Date Delivered'])
 NCLEX['Days Elapsed'] = NCLEX['Date Delivered'] - NCLEX['Graduation Date']
@@ -727,11 +727,10 @@ def stacked_bar_cohort (df, year=None, quarter_list=None, sortby='campus'):
 #stacked_bar_cohort(NCLEX_df, year=None, quarter_list=None, sortby='Campus')
 #stacked_bar_cohort(NCLEX_df, year=None, quarter_list=None, sortby='Compl Term')
 
-
 # Create the PdfPages object to which we will save the pages:
 # The with statement makes sure that the PdfPages object is closed properly at
 # the end of the block, even if an Exception occurs.
-with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\Reports\\NCLEX_Charts.pdf') as pdf:
+with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\Reports\\NCLEX_Charts 2018.pdf') as pdf:
     
     x1 = historical_line_NCLEX(IL_Competitors, school_list='DePaul University', show_vals='all')
     pdf.savefig(x1)
@@ -744,7 +743,7 @@ with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improveme
     x17 = stacked_bar_cohort(NCLEX_df, year=None, quarter_list=None, sortby='Compl Term')
     pdf.savefig(x17)
     plt.close(x17)
-    
+    '''
     x14 = historical_line_NCLEX(IL_Competitors, school_list='DePaul University', show_vals=None)
     pdf.savefig(x1)
     plt.close(x1)
@@ -752,11 +751,11 @@ with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improveme
     x2 = historical_line_NCLEX(IL_Competitors)
     pdf.savefig(x2)
     plt.close(x2)
-    
-    x3 = scatter_trend_NCLEX(IL_Competitors, school_list='DePaul University', year_list=[2010,2011,2012,2013,2014,2015,2016])
+    '''
+    x3 = scatter_trend_NCLEX(IL_Competitors, school_list='DePaul University', year_list=[2010,2011,2012,2013,2014,2015,2016, 2017])
     pdf.savefig(x3)
     plt.close(x3)
-    
+    '''
     x4 = scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016])
     pdf.savefig(x4)
     plt.close(x4)
@@ -792,7 +791,7 @@ with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improveme
     x12 = NCLEX_boxplot(NCLEX_df, 'Qtrs to Grad', 'Result')
     pdf.savefig(x12)
     plt.close(x12)
-
+    '''
     #Set the file's metadata via the PdfPages object:
     d = pdf.infodict()
     d['Title'] = 'NCLEX Charts'
