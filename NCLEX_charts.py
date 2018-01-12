@@ -5,7 +5,7 @@ Created on Tue Feb  7 11:01:51 2017
 @author: astachn1
 """
 
-#import os
+import dpu.scripts as dpu
 from datetime import datetime
 import pandas as pd
 import numpy as np
@@ -49,19 +49,41 @@ NCLEX.drop(['Last Name','First Name','Time Delivered', 'Candidate ID'],axis=1,in
 NCLEX['Date Delivered'] = pd.to_datetime(NCLEX['Date Delivered'])
 NCLEX['Days Elapsed'] = NCLEX['Date Delivered'] - NCLEX['Graduation Date']
 NCLEX['Days Elapsed'] = NCLEX['Days Elapsed'].dt.days
+# Standardize Result
+result_map = {'FAIL': 'Fail',
+              'Fail': 'Fail',
+              'fail': 'Fail',
+              'PASS': 'Pass',
+              'Pass': 'Pass',
+              'pass': 'Pass'}
+NCLEX['Result'] = NCLEX['Result'].map(result_map)
+# Remove repeat test-takers
+NCLEX = NCLEX[NCLEX['Repeater'] == 'No']
 
 #NCLEX.head()
 
 #Read Grad Data
-Graduates = pd.read_csv('W:\\csh\\Nursing Administration\\Data Management\\DataWarehouse\\Testing\\Grad.csv', delimiter=',',na_values='nan',usecols=['ID','Degree','Acad Plan','Sub-Plan','Admit Term','Compl Term','Confer Dt','GPA'],dtype={'ID':str},parse_dates=['Confer Dt'])
-#Multiple steps to remove trailing ".0" and fill first zero where needed
-Graduates['ID'] = [s.rstrip("0") for s in Graduates['ID']]
-Graduates['ID'] = [s.rstrip(".") for s in Graduates['ID']]
-Graduates['ID'] = Graduates['ID'].str.zfill(7)
-
-'''Compute number of quarters taken to graduate by subtracting admit quarter from
-# graduation quarter. The quarters typically count by fives, but there are several
-# inconsistencies, which must be accounted for based on the range of the terms.'''
+# Initialize dictionary of dfs
+frames = {}
+#Build a dictionary of dataframes
+frames = dpu.build_File('W:\\csh\\Nursing Administration\\Data Management\\DataWarehouse\\OG_Data\\NSG_GRADS', frames, file_format='excel')
+#Concatenate all data frames (ignore index)
+Grad_data = pd.concat(frames, ignore_index=True)
+# Convert Student ID to string format
+Grad_data['ID'] = Grad_data['ID'].astype(str)
+# Multiple steps to remove trailing ".0" and fill first zero where needed
+Grad_data['ID'] = [s.rstrip("0") for s in Grad_data['ID']]
+Grad_data['ID'] = [s.rstrip(".") for s in Grad_data['ID']]
+Grad_data['ID'] = Grad_data['ID'].str.zfill(7)
+# Drop students in the wrong degree program (students who take more than
+# one program will be duplicated unnecessarily).
+Grad_data = Grad_data[Grad_data['Degree'] == 'MS']
+Grad_data = Grad_data[Grad_data['Acad Plan'].isin(['MS-NURSING', 'MS-GENRNSG'])]
+Grad_data = Grad_data[Grad_data['Sub-Plan'] != 'ANESTHESIS']
+'''Compute number of quarters taken to graduate by subtracting admit quarter
+# from graduation quarter. The quarters typically count by fives, but there
+# are several inconsistencies, which must be accounted for based on the range
+# of the terms.'''
 def qtrs(admit, grad):
     if admit >= 860:
         return ((grad - admit)/5) + 1
@@ -73,10 +95,10 @@ def qtrs(admit, grad):
         return ((grad - admit)/5) - 3
     else:
         return ((grad - admit)/5)
-Graduates['Qtrs to Grad'] = Graduates.apply(lambda x: qtrs(x['Admit Term'], x['Compl Term']), axis=1)
+Grad_data['Qtrs to Grad'] = Grad_data.apply(lambda x: qtrs(x['Admit Term'], x['Compl Term']), axis=1)
 
 #Combine NCLEX and Graduates into Temp dataframe
-NCLEX_df = pd.merge(NCLEX[['Empl ID', 'Campus', 'Result', 'Days Elapsed', 'Year', 'Quarter', 'Graduation Date']], Graduates[['ID', 'GPA', 'Qtrs to Grad', 'Compl Term', 'Degree']], how='inner', left_on='Empl ID', right_on='ID', sort=True, copy=True)
+NCLEX_df = pd.merge(NCLEX[['Empl ID', 'Campus', 'Result', 'Days Elapsed', 'Year', 'Quarter', 'Graduation Date']], Grad_data[['ID', 'GPA', 'Qtrs to Grad', 'Compl Term', 'Degree']], how='left', left_on='Empl ID', right_on='ID', sort=True, copy=True)
 
 #Add Completion Term as a string
 NCLEX_df['Compl Term'] = NCLEX_df['Compl Term'].astype(str)
@@ -101,7 +123,7 @@ NCLEX_df = NCLEX_df.drop(NCLEX_df[NCLEX_df['Empl ID'] == '0858995'].index)
 
 #Drop the entries for non-MS degrees (these represent students who earned multiple
 #degrees, and we only care about the MENP degree)
-NCLEX_df = NCLEX_df.drop(NCLEX_df[NCLEX_df['Degree'] != 'MS'].index)
+#NCLEX_df = NCLEX_df.drop(NCLEX_df[NCLEX_df['Degree'] != 'MS'].index)
 NCLEX_df = NCLEX_df.drop('Degree',axis=1)
 
 #Manually update the Qtrs to Grad for one student who stopped out and restarted
@@ -298,7 +320,7 @@ def stacked_bar_NCLEX (historical_rates, school_list=None, year_list=None):
     return(fig)
 
 #stacked_bar_NCLEX(IL_Competitors)
-#stacked_bar_NCLEX(IL_Competitors, school_list=['DePaul University','Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016])
+#stacked_bar_NCLEX(IL_Competitors, school_list=['DePaul University','Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016,2017])
 #stacked_bar_NCLEX(IL_Competitors, school_list='DePaul University')
 
 def scatter_trend_NCLEX (historical_rates, school_list=None, year_list=None):
@@ -364,9 +386,9 @@ def scatter_trend_NCLEX (historical_rates, school_list=None, year_list=None):
     #plt.show()
     return(fig)
 
-#scatter_trend_NCLEX(IL_Competitors, school_list='DePaul University', year_list=[2010,2011,2012,2013,2014,2015,2016])
-#scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016])
-#scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'University of Illinois at Chicago', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016])
+#scatter_trend_NCLEX(IL_Competitors, school_list='DePaul University', year_list=[2010,2011,2012,2013,2014,2015,2016,2017])
+#scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016,2017])
+#scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'University of Illinois at Chicago', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016,2017])
 
 def histogram_NCLEX (NCLEX_df, year_list=None, field='Days Elapsed'):
     '''Given a user-specified field, creates dual charts with the top
@@ -389,6 +411,8 @@ def histogram_NCLEX (NCLEX_df, year_list=None, field='Days Elapsed'):
 
     #Subset dataframe based on years requested
     NCLEX = NCLEX_df[(NCLEX_df['Year'].isin(years))]
+    # Drop NaNs
+    NCLEX.dropna(subset=[field], inplace=True)
     
     #Set defaults
     plt.rcdefaults()
@@ -445,7 +469,7 @@ def histogram_NCLEX (NCLEX_df, year_list=None, field='Days Elapsed'):
         if NCLEX[(NCLEX[field] >= x) & (NCLEX[field] < (x + counter))].count()['Result'] == 0:
             pass_rate.append(0)
         else:
-            pass_rate.append(NCLEX[(NCLEX[field] >= x) & (NCLEX[field] < (x + counter)) & (NCLEX['Result'] == 'PASS')].count()['Result'] / NCLEX[(NCLEX[field] >= x) & (NCLEX[field] < (x + counter))].count()['Result'])
+            pass_rate.append(NCLEX[(NCLEX[field] >= x) & (NCLEX[field] < (x + counter)) & (NCLEX['Result'] == 'Pass')].count()['Result'] / NCLEX[(NCLEX[field] >= x) & (NCLEX[field] < (x + counter))].count()['Result'])
     
     #Plot histogram with pass rates as y axis
     x2.bar(x_pos, pass_rate, align='edge', edgecolor='black', width=1, alpha=0.75)
@@ -478,13 +502,13 @@ def histogram_NCLEX (NCLEX_df, year_list=None, field='Days Elapsed'):
     #plt.show()
     return fig
 
-#histogram_NCLEX(NCLEX_df, field='Days Elapsed', year_list='2016')
-#histogram_NCLEX(NCLEX_df, field='Days Elapsed', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016'])
+#histogram_NCLEX(NCLEX_df, field='Days Elapsed', year_list='2017')
+#histogram_NCLEX(NCLEX_df, field='Days Elapsed', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016', '2017'])
 #
-#histogram_NCLEX(NCLEX_df, field='GPA', year_list='2016')
-#histogram_NCLEX(NCLEX_df, field='GPA', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016'])
+#histogram_NCLEX(NCLEX_df, field='GPA', year_list='2017')
+#histogram_NCLEX(NCLEX_df, field='GPA', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016', '2017'])
 #
-#histogram_NCLEX(NCLEX_df, field='Qtrs to Grad', year_list='2016')
+#histogram_NCLEX(NCLEX_df, field='Qtrs to Grad', year_list='2017')
 #histogram_NCLEX(NCLEX_df, field='Qtrs to Grad', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016'])
 
 def NCLEX_boxplot (df, column, groupby):
@@ -559,23 +583,23 @@ def stacked_bar_campus (df, year=None, quarter_list=None):
     patch_legend = []
     pass_n = {}
     fail_n = {}
-    for i,campus in enumerate(campuses):
+    for campus in campuses:
         pass_n[campus] = 0
         fail_n[campus] = 0
     
     #Loop through programs and terms and create all requested charts
     for i, quarter in enumerate(quarters):
-        
         cmp = np.arange(len(campuses))
         cmp = cmp + (i*len(cmp)) + i
             
         #Build stacked bars for each year
         for j,campus in enumerate(campuses):
-            p = df[(df["Campus"] == campus) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'PASS')].count()['Result']
+            
+            p = df[(df["Campus"] == campus) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'Pass')].count()['Result']
             pass_n[campus] += p
             Pass_bar = ax.bar(cmp[j], p, color=campus_pass_colors[campus], label='Pass')
                   
-            f = df[(df["Campus"] == campus) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'FAIL')].count()['Result']
+            f = df[(df["Campus"] == campus) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'Fail')].count()['Result']
             fail_n[campus] += f
             Fail_bar = ax.bar(cmp[j], f, color=campus_fail_colors[campus], bottom=p, label='Fail')
             
@@ -616,7 +640,7 @@ def stacked_bar_campus (df, year=None, quarter_list=None):
     #plt.show()
     return(fig)
     
-#stacked_bar_campus(NCLEX_df, year=None, quarter_list=None)
+#stacked_bar_campus(NCLEX_df, year='2017', quarter_list=None)
 
 def stacked_bar_cohort (df, year=None, quarter_list=None, sortby='campus'):
     '''Creates stacked bar chart(s) that indicate the number of candidates
@@ -679,11 +703,11 @@ def stacked_bar_cohort (df, year=None, quarter_list=None, sortby='campus'):
             
         #Build stacked bars for each year
         for j,cohort in enumerate(cohorts):
-            p = df[(df[sortby] == cohort) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'PASS')].count()['Result']
+            p = df[(df[sortby] == cohort) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'Pass')].count()['Result']
             pass_n[cohort] += p
             Pass_bar = ax.bar(cmp[j], p, color=colormap[j], label='Pass')
                   
-            f = df[(df[sortby] == cohort) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'FAIL')].count()['Result']
+            f = df[(df[sortby] == cohort) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'Fail')].count()['Result']
             fail_n[cohort] += f
             Fail_bar = ax.bar(cmp[j], f, color=colormap[-(j+1)], bottom=p, label='Fail')
             
@@ -743,7 +767,7 @@ with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improveme
     x17 = stacked_bar_cohort(NCLEX_df, year=None, quarter_list=None, sortby='Compl Term')
     pdf.savefig(x17)
     plt.close(x17)
-    '''
+    
     x14 = historical_line_NCLEX(IL_Competitors, school_list='DePaul University', show_vals=None)
     pdf.savefig(x1)
     plt.close(x1)
@@ -751,11 +775,11 @@ with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improveme
     x2 = historical_line_NCLEX(IL_Competitors)
     pdf.savefig(x2)
     plt.close(x2)
-    '''
+    
     x3 = scatter_trend_NCLEX(IL_Competitors, school_list='DePaul University', year_list=[2010,2011,2012,2013,2014,2015,2016, 2017])
     pdf.savefig(x3)
     plt.close(x3)
-    '''
+    
     x4 = scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016])
     pdf.savefig(x4)
     plt.close(x4)
@@ -791,7 +815,7 @@ with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improveme
     x12 = NCLEX_boxplot(NCLEX_df, 'Qtrs to Grad', 'Result')
     pdf.savefig(x12)
     plt.close(x12)
-    '''
+    
     #Set the file's metadata via the PdfPages object:
     d = pdf.infodict()
     d['Title'] = 'NCLEX Charts'
