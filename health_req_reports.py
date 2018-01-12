@@ -392,15 +392,11 @@ def check_compliance (row):
     
 test2[['Status', 'Num Reqs Due', 'Reqs Due']] = test2.apply(check_compliance, axis=1)
 
-import dpu
 
 
-# some_file.py
-import sys
-sys.path.insert(0, '..\\dpu')
+import dpu.scripts as dpu
 
-import dpu
-
+dpu.hello()
 
 
 
