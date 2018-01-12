@@ -11,6 +11,7 @@ import os
 from datetime import datetime
 from fuzzywuzzy import fuzz, process
 import re
+import dpu.scripts as dpu
 
 #############################################################
 # Functions
@@ -394,9 +395,8 @@ test2[['Status', 'Num Reqs Due', 'Reqs Due']] = test2.apply(check_compliance, ax
 
 
 
-import dpu.scripts as dpu
 
-dpu.hello()
+
 
 
 
