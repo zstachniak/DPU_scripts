@@ -639,7 +639,6 @@ def output_faculty_schedule (current_faculty_df, FY_df, FY_year_list=None):
     
     # Create a list of terms to query, based on Fiscal Year provided
     term_list = TermDescriptions[TermDescriptions['Fiscal Year'].isin(FY_year_list)]['Term']
-    #print(term_list)
     
     # Initiatlize a term dictionary for easier representation
     term_dict = dict(zip(TermDescriptions['Term'], TermDescriptions['Long Description']))
@@ -654,11 +653,11 @@ def output_faculty_schedule (current_faculty_df, FY_df, FY_year_list=None):
         faculty_df['Term'] = faculty_df['Term'].map(term_dict)
         
         # If path does not exist, make path
-        if not os.path.exists('{0}\\Tables\\{1}\\'.format(Path, Date)):
-            os.makedirs('{0}\\Tables\\{1}\\'.format(Path, Date))
+        if not os.path.exists('{0}\\Tables\\{1}\\{2}\\'.format(Path, FY_year_list[0], Date)):
+            os.makedirs('{0}\\Tables\\{1}\\{2}\\'.format(Path, FY_year_list[0], Date))
             
         # Write out to excel
-        faculty_df.to_excel('{0}\\Tables\\{1}\\{2}.xlsx'.format(Path, Date, faculty), sheet_name='Workload Projection')
+        faculty_df.to_excel('{0}\\Tables\\{1}\\{2}\\{3}.xlsx'.format(Path, FY_year_list[0], Date, faculty), sheet_name='Workload Projection')
 
 #############################################################
 # Main Function Call
