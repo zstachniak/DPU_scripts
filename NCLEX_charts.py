@@ -15,6 +15,8 @@ from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 from scipy import stats
 from sklearn.ensemble import IsolationForest
+import os
+import click
 
 IL_Competitors = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\\Illinois Yearly Pass Rates for All Schools\\CompetitorPassRates.xlsx', sheet_name='Sheet1', header=0)
 
@@ -288,72 +290,78 @@ def stacked_bar_NCLEX (historical_rates, school_list=None, year_list=None):
 #stacked_bar_NCLEX(IL_Competitors, school_list=['DePaul University','Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016,2017])
 #stacked_bar_NCLEX(IL_Competitors, school_list='DePaul University')
 
-def scatter_trend_NCLEX (historical_rates, school_list=None, year_list=None):
-    '''
-    '''
-    
-    #Create list of schools
-    if school_list == None:
-        schools = historical_rates["Master's Entry Program"].unique().tolist()
+def coerce_to_list (x):
+    '''A simple function that will coerce a single string to a list.'''
+    if type(x) is str:
+        return [x]
     else:
-        schools = []
-        if type(school_list) is str:
-            schools.append(school_list)
-        else:
-            for s in school_list:
-                schools.append(s)
-    schools.sort()
+        return x
+
+def scatter_trend (df, x_field, y_field, groupby_field, **kwargs):
+    '''Creates a simple scatter graph that also includes a trend line for
+    each groupby_val requested.
     
-    #Create list of years
-    if year_list == None:
-        years = historical_rates["Year"].unique().tolist()
-    else:
-        years = []
-        if type(year_list) is str:
-            years.append(year_list)
-        else:
-            for y in year_list:
-                years.append(y)
-    years.sort()
+    @ Parameters:
+    ----------------------------
+    df: dataframe
+    x_field: Named dataframe column that will represent x-axis
+    y_field: Named dataframe column that will represent y-axis
+    groupby_field: Named dataframe column that will represent different lines
     
-    #Remove Years if necessary
-    historical_rates = historical_rates[historical_rates['Year'].isin(years)]
+    @ Optional Keyword Arguments:
+    ----------------------------
+    title: Title for plot
+    y_lim: a list that represents [min, max] of y_ticks
+    x_vals: a list of values to filter x_field of df by
+    y_vals: a list of values to filter y_field of df by
+    groupby_vals: a list of values to filter groupby_field of df by
+    groupby_colors: a list of colors that should match the groupby_vals.
+        Defaults to an hls seaborn palette.
+    '''
+    # Gather optional keyword arguments
+    title = kwargs.pop('title', 'Scatterplot with Trendline')
+    y_lim = kwargs.pop('y_lim', None)
+    x_vals = coerce_to_list(kwargs.pop('x_vals', df[x_field].unique().tolist()))
+    y_vals = coerce_to_list(kwargs.pop('y_vals', df[y_field].unique().tolist()))
+    groupby_vals = coerce_to_list(kwargs.pop('groupby_vals', df[groupby_field].unique().tolist()))
+    groupby_colors = kwargs.pop('groupby_colors', sns.color_palette("hls", len(groupby_vals)))
+     
+    # Filter data if necessary
+    for field, vals in zip([x_field, y_field, groupby_field], [x_vals, y_vals, groupby_vals]):
+        df = df[df[field].isin(vals)].copy(deep=True)
     
-    #Set defaults
+    # Set defaults
     plt.rcdefaults()
     plt.style.use('seaborn')
     fig, ax = plt.subplots()
     
-    for school in schools:
-        
-        x = historical_rates[historical_rates["Master's Entry Program"] == school]['Year']
-        y = historical_rates[historical_rates["Master's Entry Program"] == school]['Pass Rate']
-
-        #Plot
-        ax.plot(x, y, 'o', color=school_colors[school], label='%s Pass Rate'%(school))
-        
-        #Fit and plot trendline
-        z = np.polyfit(x,y,1)
+    # Iterate through groupby
+    for val, col in zip(groupby_vals, groupby_colors):
+        x = df[df[groupby_field] == val][x_field]
+        y = df[df[groupby_field] == val][y_field]
+        # Plot scatter
+        ax.plot(x, y, 'o', color=col, label='{0} Pass Rate'.format(val))
+        # Fit and plot trendline
+        z = np.polyfit(x, y, 1)
         p = np.poly1d(z)
-        ax.plot(x,p(x),'--', color=school_colors[school], label='%s Slope: %.2f'%(school_abbr[school],z[0]))
+        ax.plot(x, p(x), '--', color=col, label='Slope: {0:.2f}'.format(z[0]))
         
     #Chart formatting
-    ax.set_title("Yearly Pass Rates of IL Master's Entry Programs")
-    ax.set_ylabel('Pass Rate')
-    ax.set_xlabel('Calendar Year')
-    ax.set_xticks(years)
-    ax.set_xticklabels(years)
+    ax.set_title(title)
+    ax.set_ylabel(y_field)
+    ax.set_xlabel(x_field)
+    ax.set_xticks(x_vals)
+    ax.set_xticklabels(x_vals)
     axes = plt.gca()
-    axes.set_ylim([70,101])
+    if y_lim:
+        axes.set_ylim(y_lim)
     ax.legend(loc='lower left')
     
     #Plot it
-    #plt.show()
     return(fig)
 
-#scatter_trend_NCLEX(IL_Competitors, school_list='DePaul University', year_list=[2010,2011,2012,2013,2014,2015,2016,2017])
-#scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016,2017])
-#scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'University of Illinois at Chicago', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016,2017])
+scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", x_vals=np.arange(2010,2018), groupby_vals='DePaul University', groupby_colors=['#396E93'], y_lim=[70,101])
+#scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", x_vals=np.arange(2010,2018), groupby_vals=['DePaul University', 'Rush University'], groupby_colors=['#396E93', '#80AA69'], y_lim=[70,101])
 
 def histogram_NCLEX (df, field, **kwargs):
     '''Given a user-specified field, creates dual charts with the top
@@ -769,83 +777,67 @@ def stacked_bar_cohort (df, year=None, quarter_list=None, sortby='campus'):
 #stacked_bar_cohort(NCLEX_df, year=None, quarter_list=None, sortby='Campus')
 #stacked_bar_cohort(NCLEX_df, year=None, quarter_list=None, sortby='Compl Term')
 
-# Create the PdfPages object to which we will save the pages:
-# The with statement makes sure that the PdfPages object is closed properly at
-# the end of the block, even if an Exception occurs.
-with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\Reports\\NCLEX_Charts 2018.pdf') as pdf:
+
+
+
+
+#############################################################
+# Main
+#############################################################
+@click.command()
+@click.option(
+        '--year',
+        help='The year through which you want to focus your inquiry, e.g. "2018"',
+)
+def main(year):
+    '''Main function.'''
+    # If the user did not pass a year, use current year
+    if not year:
+        today = datetime.today()
+        year = str(today.year)
+        
+    # Build all the graphs
+    graphs = [
+            historical_line_NCLEX(IL_Competitors, school_list='DePaul University', show_vals='all'),
+            
+            historical_line_NCLEX(IL_Competitors),
+            
+            scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", groupby_vals='DePaul University', groupby_colors=['#396E93'], y_lim=[70,101]),
+                                                                                                                                                                                                    
+            scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", groupby_vals=['DePaul University', 'Rush University', 'University of Illinois at Chicago'], groupby_colors=['#396E93', '#80AA69', '#4C443C'], y_lim=[70,101]),
+                          
+            stacked_bar_NCLEX(IL_Competitors, school_list=['DePaul University','Rush University']),
+            
+            histogram_NCLEX(NCLEX_df, 'GPA', ignore_outliers=False),
+            
+            ANOVA_boxplot(NCLEX_df, 'GPA', 'Result'),
+            
+            histogram_NCLEX(NCLEX_df, 'Days Elapsed', ignore_outliers=True),
+            
+            ANOVA_boxplot(NCLEX_df, 'Days Elapsed', 'Result', ignore_outliers=True),
+            
+            histogram_NCLEX(NCLEX_df, 'Qtrs to Grad', ignore_outliers=True),
+            
+            ANOVA_boxplot(NCLEX_df, 'Qtrs to Grad', 'Result', ignore_outliers=True)
+            ]
     
-    x1 = historical_line_NCLEX(IL_Competitors, school_list='DePaul University', show_vals='all')
-    pdf.savefig(x1)
-    plt.close(x1)
-    
+
+    '''
     x13 = stacked_bar_campus(NCLEX_df, year=None, quarter_list=None)
-    pdf.savefig(x13)
-    plt.close(x13)
-    
     x17 = stacked_bar_cohort(NCLEX_df, year=None, quarter_list=None, sortby='Compl Term')
-    pdf.savefig(x17)
-    plt.close(x17)
+    '''
     
-    x14 = historical_line_NCLEX(IL_Competitors, school_list='DePaul University', show_vals=None)
-    pdf.savefig(x1)
-    plt.close(x1)
-    
-    x2 = historical_line_NCLEX(IL_Competitors)
-    pdf.savefig(x2)
-    plt.close(x2)
-    
-    x3 = scatter_trend_NCLEX(IL_Competitors, school_list='DePaul University')
-    pdf.savefig(x3)
-    plt.close(x3)
-    
-    x4 = scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'Rush University'])
-    pdf.savefig(x4)
-    plt.close(x4)
-    
-    x5 = scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'University of Illinois at Chicago', 'Rush University'])
-    pdf.savefig(x5)
-    plt.close(x5)
-    
-    x6 = stacked_bar_NCLEX(IL_Competitors, school_list=['DePaul University','Rush University'])
-    pdf.savefig(x6)
-    plt.close(x6)   
-    
-    x7 = histogram_NCLEX(NCLEX_df, 'GPA', ignore_outliers=False)
-    pdf.savefig(x7)
-    plt.close(x7)
-    
-    x8 = ANOVA_boxplot(NCLEX_df, 'GPA', 'Result')
-    pdf.savefig(x8)
-    plt.close(x8)
-    
-    x9 = histogram_NCLEX(NCLEX_df, 'Days Elapsed', ignore_outliers=True)
-    pdf.savefig(x9)
-    plt.close(x9)
-    
-    x10 = ANOVA_boxplot(NCLEX_df, 'Days Elapsed', 'Result', ignore_outliers=True)
-    pdf.savefig(x10)
-    plt.close(x10)
-    
-    x11 = histogram_NCLEX(NCLEX_df, 'Qtrs to Grad', ignore_outliers=True)
-    pdf.savefig(x11)
-    plt.close(x11)
-    
-    x12 = ANOVA_boxplot(NCLEX_df, 'Qtrs to Grad', 'Result', ignore_outliers=True)
-    pdf.savefig(x12)
-    plt.close(x12)
-    
-    #Set the file's metadata via the PdfPages object:
-    d = pdf.infodict()
-    d['Title'] = 'NCLEX Charts'
-    d['Author'] = 'Zander Stachniak'
-    d['ModDate'] = datetime.now()
+    # Open a PDF file
+    with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\Reports\\NCLEX_Charts {}.pdf'.format(today.strftime('%Y-%m-%d'))) as pdf:
+        # Write all the figures to file
+        for graph in graphs:
+            pdf.savefig(graph)
+            plt.close(graph)
+        #Set the file's metadata via the PdfPages object:
+        d = pdf.infodict()
+        d['Title'] = 'NCLEX Charts'
+        d['Author'] = os.getlogin()
+        d['ModDate'] = today
 
-
-
-
-
-
-
-
-
-
+if __name__ == "__main__":
+    main()
