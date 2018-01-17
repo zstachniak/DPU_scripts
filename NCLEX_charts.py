@@ -14,6 +14,7 @@ import matplotlib.mlab as mlab
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 from scipy import stats
+from sklearn.ensemble import IsolationForest
 
 IL_Competitors = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\\Illinois Yearly Pass Rates for All Schools\\CompetitorPassRates.xlsx', sheet_name='Sheet1', header=0)
 
@@ -60,21 +61,9 @@ NCLEX['Result'] = NCLEX['Result'].map(result_map)
 # Remove repeat test-takers
 NCLEX = NCLEX[NCLEX['Repeater'] == 'No']
 
-#NCLEX.head()
-
 #Read Grad Data
-# Initialize dictionary of dfs
-frames = {}
-#Build a dictionary of dataframes
-frames = dpu.build_File('W:\\csh\\Nursing Administration\\Data Management\\DataWarehouse\\OG_Data\\NSG_GRADS', frames, file_format='excel')
-#Concatenate all data frames (ignore index)
-Grad_data = pd.concat(frames, ignore_index=True)
-# Convert Student ID to string format
-Grad_data['ID'] = Grad_data['ID'].astype(str)
-# Multiple steps to remove trailing ".0" and fill first zero where needed
-Grad_data['ID'] = [s.rstrip("0") for s in Grad_data['ID']]
-Grad_data['ID'] = [s.rstrip(".") for s in Grad_data['ID']]
-Grad_data['ID'] = Grad_data['ID'].str.zfill(7)
+f = dpu.get_latest('W:/csh/Nursing Administration/Data Management/DataWarehouse/OG_Data/NSG_GRADS', 'NSG_GRAD_REVISED')
+Grad_data = pd.read_excel(f, skiprows=0, header=1, na_values='nan', converters={'ID':str, 'Admit Term':str, 'Compl Term': str})
 # Drop students in the wrong degree program (students who take more than
 # one program will be duplicated unnecessarily).
 Grad_data = Grad_data[Grad_data['Degree'] == 'MS']
@@ -85,6 +74,8 @@ Grad_data = Grad_data[Grad_data['Sub-Plan'] != 'ANESTHESIS']
 # are several inconsistencies, which must be accounted for based on the range
 # of the terms.'''
 def qtrs(admit, grad):
+    admit = int(admit)
+    grad = int(grad)
     if admit >= 860:
         return ((grad - admit)/5) + 1
     elif admit > 620:
@@ -97,15 +88,10 @@ def qtrs(admit, grad):
         return ((grad - admit)/5)
 Grad_data['Qtrs to Grad'] = Grad_data.apply(lambda x: qtrs(x['Admit Term'], x['Compl Term']), axis=1)
 
-#Combine NCLEX and Graduates into Temp dataframe
-NCLEX_df = pd.merge(NCLEX[['Empl ID', 'Campus', 'Result', 'Days Elapsed', 'Year', 'Quarter', 'Graduation Date']], Grad_data[['ID', 'GPA', 'Qtrs to Grad', 'Compl Term', 'Degree']], how='left', left_on='Empl ID', right_on='ID', sort=True, copy=True)
-
-#Add Completion Term as a string
-NCLEX_df['Compl Term'] = NCLEX_df['Compl Term'].astype(str)
-NCLEX_df['Compl Term'] = [t.rstrip("0") for t in NCLEX_df['Compl Term']]
-NCLEX_df['Compl Term'] = [t.rstrip(".") for t in NCLEX_df['Compl Term']]
-NCLEX_df['Compl Term'] = NCLEX_df['Compl Term'].str.zfill(4)
-
+# Combine NCLEX and Graduates into Temp dataframe
+NCLEX_df = pd.merge(NCLEX[['Empl ID', 'Campus', 'Result', 'Days Elapsed', 'Year', 'Quarter', 'Graduation Date']], Grad_data[['ID', 'GPA', 'Qtrs to Grad', 'Compl Term']], how='left', left_on='Empl ID', right_on='ID', sort=True, copy=True)
+# Drop degree and ID fields
+NCLEX_df = NCLEX_df.drop(['ID'],axis=1)
 '''We do not have the testing dates for students who take NCLEX out of state.
 #There are also a few oddities, where students test before they technically
 #receive their degrees. To avoid these five outlier cases from affecting 
@@ -114,27 +100,6 @@ NCLEX_df['Compl Term'] = NCLEX_df['Compl Term'].str.zfill(4)
 elapsed = round(NCLEX_df.mean()['Days Elapsed'],0)
 NCLEX_df['Days Elapsed'].fillna(elapsed, inplace=True)
 NCLEX_df.loc[NCLEX_df['Days Elapsed'] <= 0, 'Days Elapsed'] = elapsed
-
-'''Manually update the Days Elapsed for one student who showed as an outlier.
-# Upon further inspection, the graduation date was an error.'''
-NCLEX_df.loc[NCLEX_df['Empl ID'] == '1315669', 'Days Elapsed'] = 31.0
-
-NCLEX_df = NCLEX_df.drop(NCLEX_df[NCLEX_df['Empl ID'] == '0858995'].index)
-
-#Drop the entries for non-MS degrees (these represent students who earned multiple
-#degrees, and we only care about the MENP degree)
-#NCLEX_df = NCLEX_df.drop(NCLEX_df[NCLEX_df['Degree'] != 'MS'].index)
-NCLEX_df = NCLEX_df.drop('Degree',axis=1)
-
-#Manually update the Qtrs to Grad for one student who stopped out and restarted
-#and currently displays two separate values
-NCLEX_df.loc[NCLEX_df['Empl ID'] == '0917861', 'Qtrs to Grad'] = 22
-
-NCLEX_df = NCLEX_df.drop('ID', 1)
-
-#NCLEX_df.to_csv('W:\\csh\\Nursing Administration\\Data Management\\DataWarehouse\\Testing\\NCLEX_Anova.csv')
-
-#NCLEX_df.head()
 
 def historical_line_NCLEX (historical_rates, school_list=None, year_list=None, show_vals=None):
     '''Creates a line graph that displays the NCLEX pass rates of IL Master's
@@ -390,66 +355,91 @@ def scatter_trend_NCLEX (historical_rates, school_list=None, year_list=None):
 #scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016,2017])
 #scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'University of Illinois at Chicago', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016,2017])
 
-def histogram_NCLEX (NCLEX_df, year_list=None, field='Days Elapsed'):
+def histogram_NCLEX (df, field, **kwargs):
     '''Given a user-specified field, creates dual charts with the top
     chart being a histogram of the data distribution and the bottom
     chart plotting the pass rates for the same bin sizes as the 
     histogram. Together, this should give an idea of both the performance
-    of a group and the relative importance of that group.'''
+    of a group and the relative importance of that group.
     
-    #Create list of years
-    if year_list == None:
-        years = NCLEX_df["Year"].unique().tolist()
-    else:
-        years = []
-        if type(year_list) is str:
-            years.append(year_list)
-        else:
-            for y in year_list:
-                years.append(y)
+    
+    @ Optional Keyword Arguments:
+    ----------------------------
+    years: A list of years (string format) to use. Default is to use all.
+    ignore_outliers: if True, function will run an Isolation Forest
+        to determine values that are outliers in the given field and
+        will remove those data points before graphing.
+    contamination: The expected percentage of outliers in the data frame.
+    '''
+    # Gather optional keyword arguments
+    years = kwargs.pop('years', df["Year"].unique().tolist())
+    ignore_outliers = kwargs.pop('ignore_outliers', True)
+    contamination = kwargs.pop('contamination', 0.01)
+    
+    # Coerce years into a list
+    if type(years) is str:
+        years = [years]
+    # Sort list
     years.sort()
-
-    #Subset dataframe based on years requested
-    NCLEX = NCLEX_df[(NCLEX_df['Year'].isin(years))]
-    # Drop NaNs
-    NCLEX.dropna(subset=[field], inplace=True)
     
-    #Set defaults
+    # Subset dataframe based on years requested
+    df = df.loc[df['Year'].isin(years)].copy()
+    # Drop NaNs in field
+    df.dropna(subset=[field], inplace=True)
+    
+    # Set plot defaults
     plt.rcdefaults()
     plt.style.use('seaborn')
     fig, ax = plt.subplots()
     
-    #Initiatlize a subplot grid
+    # Initiatlize a subplot grid
     x1 = plt.subplot2grid((2,4), (0,0), colspan=4)
     x2 = plt.subplot2grid((2,4), (1,0), colspan=4)
     
-    #Mean and Standard Deviation
-    mu = NCLEX[field].mean()
-    sigma = NCLEX[field].std()
+    # Remove outliers, if requested
+    if ignore_outliers:
+        # Use a deep copy of data to avoid making changes to original
+        X = df[field].copy(deep=True)
+        X = X.values.reshape(-1, 1)
+        # Prepare and fit the Isolation Forest
+        IsoFor = IsolationForest(bootstrap=True, n_jobs=-1, contamination=contamination)
+        IsoFor.fit(X)
+        # Make predictions
+        y_pred = IsoFor.predict(X)
+        num_outliers = np.unique(y_pred, return_counts=True)[1][0]
+        #print('{} outliers detected and removed from analysis.'.format(num_outliers))
+        # Truth value of non_outliers (equal to 1)
+        non_outliers = y_pred == 1
+        # Remove outliers
+        df = df[non_outliers]
     
-    #Set mins, maxes, and bin widths
+    # Determine Mean and Standard Deviation
+    mu = df[field].mean()
+    sigma = df[field].std()
+    
+    # Set mins, maxes, and bin widths
     if field == 'GPA':
         field_min = 3.0
         field_max = 4.0
         counter = 0.1
     elif field == 'Days Elapsed':
         field_min = 0
-        field_max = NCLEX[field].max()
+        field_max = df[field].max()
         counter = 7
     elif field == 'Qtrs to Grad':
-        field_min = 6
-        field_max = NCLEX[field].max()
+        field_min = df[field].min()
+        field_max = df[field].max()
         counter = 1
     else:
         return print('Field not in dataframe.')
     
     #Set field_range, bins, and x_positions
     field_range = np.arange(field_min,field_max,counter)
-    bins = np.arange(field_min,field_max + counter,counter)
+    field_bins = np.arange(field_min,field_max + counter,counter)
     x_pos = np.arange(len(field_range))
     
     #Plot histogram to x1 with probability density
-    n, bins, patches = x1.hist(NCLEX[field], normed=1, edgecolor='black', alpha=0.75, bins=bins)
+    n, bins, patches = x1.hist(df[field], normed=1, edgecolor='black', alpha=0.75, bins=field_bins)
     
     # add a 'best fit' line to x1
     y = mlab.normpdf(bins, mu, sigma)
@@ -461,25 +451,25 @@ def histogram_NCLEX (NCLEX_df, year_list=None, field='Days Elapsed'):
     x1.set_title(x1_title)
     x1.grid(True)
 
-    #Initialize a list to store pass rates for x2   
+    # Initialize a list to store pass rates for x2   
     pass_rate = []
     
-    #Loop through bins and append pass rates for each
+    # Loop through bins and append pass rates for each
     for x in field_range:
-        if NCLEX[(NCLEX[field] >= x) & (NCLEX[field] < (x + counter))].count()['Result'] == 0:
+        if df[(df[field] >= x) & (df[field] < (x + counter))].count()['Result'] == 0:
             pass_rate.append(0)
         else:
-            pass_rate.append(NCLEX[(NCLEX[field] >= x) & (NCLEX[field] < (x + counter)) & (NCLEX['Result'] == 'Pass')].count()['Result'] / NCLEX[(NCLEX[field] >= x) & (NCLEX[field] < (x + counter))].count()['Result'])
+            pass_rate.append(df[(df[field] >= x) & (df[field] < (x + counter)) & (df['Result'] == 'Pass')].count()['Result'] / df[(df[field] >= x) & (df[field] < (x + counter))].count()['Result'])
     
-    #Plot histogram with pass rates as y axis
+    # Plot histogram with pass rates as y axis
     x2.bar(x_pos, pass_rate, align='edge', edgecolor='black', width=1, alpha=0.75)
     
-    #Adjustments to x_labels for better visualization
+    # Adjustments to x_labels for better visualization
     x_labels = np.append(field_range, (field_range.max() + counter))
     if field == 'Days Elapsed' or field == 'Qtrs to Grad':
         x_labels = x_labels.astype(int)
     
-    #Chart formatting for x2
+    # Chart formatting for x2
     x2.set_title("Pass Rates by {}".format(field))
     x2.set_ylabel('Pass Rate')
     yvals = x2.get_yticks()
@@ -487,29 +477,22 @@ def histogram_NCLEX (NCLEX_df, year_list=None, field='Days Elapsed'):
     x2.set_xlabel('{}'.format(field))
     x2.set_xticks(np.append(x_pos, (x_pos.max() + 1)))
     x2.set_xticklabels(x_labels)
-
-    #Make x1 tick labels invisible
+    # Make x1 tick labels invisible
     plt.setp(x1.get_xticklabels(), visible=False)
-    
-    #For Days Elapsed (where x_labels are cramped), remove every other x_label
+    #For Days Elapsed (where cramped), remove every other x_label
     if field == 'Days Elapsed':
         for label in x2.xaxis.get_ticklabels()[::2]:
             label.set_visible(False)
-    
-    plt.tight_layout()
-    
+
     #Plot it
+    plt.tight_layout()
     #plt.show()
     return fig
 
-#histogram_NCLEX(NCLEX_df, field='Days Elapsed', year_list='2017')
-#histogram_NCLEX(NCLEX_df, field='Days Elapsed', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016', '2017'])
-#
-#histogram_NCLEX(NCLEX_df, field='GPA', year_list='2017')
-#histogram_NCLEX(NCLEX_df, field='GPA', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016', '2017'])
-#
-#histogram_NCLEX(NCLEX_df, field='Qtrs to Grad', year_list='2017')
-#histogram_NCLEX(NCLEX_df, field='Qtrs to Grad', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016'])
+#histogram_NCLEX(NCLEX_df, 'Days Elapsed', ignore_outliers=True)
+#histogram_NCLEX(NCLEX_df, 'Days Elapsed', ignore_outliers=True, years='2017')
+#histogram_NCLEX(NCLEX_df, 'GPA', ignore_outliers=False)
+#histogram_NCLEX(NCLEX_df, 'Qtrs to Grad', ignore_outliers=True)
 
 def NCLEX_boxplot (df, column, groupby):
     '''
