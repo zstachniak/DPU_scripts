@@ -373,7 +373,7 @@ def histogram_NCLEX (df, field, **kwargs):
     '''
     # Gather optional keyword arguments
     years = kwargs.pop('years', df["Year"].unique().tolist())
-    ignore_outliers = kwargs.pop('ignore_outliers', True)
+    ignore_outliers = kwargs.pop('ignore_outliers', False)
     contamination = kwargs.pop('contamination', 0.01)
     
     # Coerce years into a list
@@ -396,22 +396,9 @@ def histogram_NCLEX (df, field, **kwargs):
     x1 = plt.subplot2grid((2,4), (0,0), colspan=4)
     x2 = plt.subplot2grid((2,4), (1,0), colspan=4)
     
-    # Remove outliers, if requested
+    # Remove outliers if requested
     if ignore_outliers:
-        # Use a deep copy of data to avoid making changes to original
-        X = df[field].copy(deep=True)
-        X = X.values.reshape(-1, 1)
-        # Prepare and fit the Isolation Forest
-        IsoFor = IsolationForest(bootstrap=True, n_jobs=-1, contamination=contamination)
-        IsoFor.fit(X)
-        # Make predictions
-        y_pred = IsoFor.predict(X)
-        num_outliers = np.unique(y_pred, return_counts=True)[1][0]
-        #print('{} outliers detected and removed from analysis.'.format(num_outliers))
-        # Truth value of non_outliers (equal to 1)
-        non_outliers = y_pred == 1
-        # Remove outliers
-        df = df[non_outliers]
+        df = remove_outliers(df, field, contamination=contamination)
     
     # Determine Mean and Standard Deviation
     mu = df[field].mean()
@@ -494,41 +481,89 @@ def histogram_NCLEX (df, field, **kwargs):
 #histogram_NCLEX(NCLEX_df, 'GPA', ignore_outliers=False)
 #histogram_NCLEX(NCLEX_df, 'Qtrs to Grad', ignore_outliers=True)
 
-def NCLEX_boxplot (df, column, groupby):
+def remove_outliers (df, field, contamination=0.01, verbose=False):
+    '''Function will run an Isolation Forest to determine values that 
+    are outliers in the given field and will remove those data points 
+    before returning a new dataframe.'''
+    # Use a deep copy of data to avoid making changes to original
+    X = df[field].copy(deep=True)
+    X = X.values.reshape(-1, 1)
+    # Prepare and fit the Isolation Forest
+    IsoFor = IsolationForest(bootstrap=True, n_jobs=-1, contamination=contamination)
+    IsoFor.fit(X)
+    # Make predictions
+    y_pred = IsoFor.predict(X)
+    if verbose:
+        num_outliers = np.unique(y_pred, return_counts=True)[1][0]
+        print('{} outliers detected and removed from dataframe.'.format(num_outliers))
+    # Truth value of non_outliers (equal to 1)
+    non_outliers = y_pred == 1
+    # Return new df
+    return df[non_outliers].copy(deep=True)
+
+def ANOVA_boxplot (df, field, groupby, **kwargs):
+    '''Function to plot side by side boxplot comparisons of the field 
+    separated by groupby. Function will also output statistical significance
+    test of the difference as part of the plot title.
+    
+    @ Parameters:
+    ----------------------------
+    df: The original dataframe
+    field: the field of comparison in the df
+    groupby: the groupby values
+    
+    @ Optional Keyword Arguments:
+    ----------------------------
+    ignore_outliers: if True, function will run an Isolation Forest
+        to determine values that are outliers in the given field and
+        will remove those data points before graphing.
+    contamination: The expected percentage of outliers in the data frame.
     '''
-    '''
+    # Gather optional keyword arguments
+    ignore_outliers = kwargs.pop('ignore_outliers', False)
+    contamination = kwargs.pop('contamination', 0.01)
+    
+    # Remove outliers if requested
+    if ignore_outliers:
+        df = remove_outliers(df, field, contamination=contamination)
+    
     #Set defaults
     plt.rcdefaults()
     plt.style.use('seaborn')
     fig, ax = plt.subplots()
     
+    # Drop NaNs
+    df.dropna(subset=[field], inplace=True)
+    
+    # Gather all possible values, 
     values = df[groupby].unique().tolist()
-    
+    # Then separate df by the groupby values
     frames = []
+    for val in values:
+        frames.append(df[(df[groupby] == val)][field])
     
-    for i in range(len(values)):
-        frames.append(df[(df[groupby] == values[i])][column])
-        
-    #ax.boxplot(frames, labels=values, notch=True, patch_artist=True)
+    # Plot a boxplot (outliers black dots)    
     x = ax.boxplot(frames, labels=values, notch=True, patch_artist=True, sym='k.')
-    
+    # Set transparency (looks nicer)
     for patch in x['boxes']:
         patch.set_alpha(0.75)
         
-    title = '{}: Analysis of Variance'.format(column)
-    
-    # Calculate statistical significance
+    # Statistical test to determine if the groupby values are different. 
     F, p = stats.f_oneway(frames[0], frames[1])
-    title += '\nF-Statistic: {0:.2f}, p-value: {1:.2E}'.format(F, p)
     
+    # Set chart options
+    title = '{}: Analysis of Variance'.format(field)
+    title += '\nF-Statistic: {0:.2f}, p-value: {1:.2E}'.format(F, p)
     ax.set_title(title)
-    ax.set_ylabel(column)
+    ax.set_ylabel(field)
     ax.set_xlabel(groupby)
     
     #plt.show()
     return fig
-    
-#NCLEX_boxplot(NCLEX_df, 'GPA', 'Result')
+
+#ANOVA_boxplot(NCLEX_df, 'GPA', 'Result')
+#ANOVA_boxplot(NCLEX_df, 'Days Elapsed', 'Result', ignore_outliers=True)
+#ANOVA_boxplot(NCLEX_df, 'Qtrs to Grad', 'Result', ignore_outliers=True)
 
 def stacked_bar_campus (df, year=None, quarter_list=None):
     '''Creates stacked bar chart(s) that indicate the number of candidates
@@ -759,43 +794,43 @@ with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improveme
     pdf.savefig(x2)
     plt.close(x2)
     
-    x3 = scatter_trend_NCLEX(IL_Competitors, school_list='DePaul University', year_list=[2010,2011,2012,2013,2014,2015,2016, 2017])
+    x3 = scatter_trend_NCLEX(IL_Competitors, school_list='DePaul University')
     pdf.savefig(x3)
     plt.close(x3)
     
-    x4 = scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016])
+    x4 = scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'Rush University'])
     pdf.savefig(x4)
     plt.close(x4)
     
-    x5 = scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'University of Illinois at Chicago', 'Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016])
+    x5 = scatter_trend_NCLEX(IL_Competitors, school_list=['DePaul University', 'University of Illinois at Chicago', 'Rush University'])
     pdf.savefig(x5)
     plt.close(x5)
     
-    x6 = stacked_bar_NCLEX(IL_Competitors, school_list=['DePaul University','Rush University'], year_list=[2010,2011,2012,2013,2014,2015,2016])
+    x6 = stacked_bar_NCLEX(IL_Competitors, school_list=['DePaul University','Rush University'])
     pdf.savefig(x6)
-    plt.close(x6)
+    plt.close(x6)   
     
-    x7 = histogram_NCLEX(NCLEX_df, field='GPA', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016'])
+    x7 = histogram_NCLEX(NCLEX_df, 'GPA', ignore_outliers=False)
     pdf.savefig(x7)
     plt.close(x7)
     
-    x8 = NCLEX_boxplot(NCLEX_df, 'GPA', 'Result')
+    x8 = ANOVA_boxplot(NCLEX_df, 'GPA', 'Result')
     pdf.savefig(x8)
     plt.close(x8)
     
-    x9 = histogram_NCLEX(NCLEX_df, field='Days Elapsed', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016'])
+    x9 = histogram_NCLEX(NCLEX_df, 'Days Elapsed', ignore_outliers=True)
     pdf.savefig(x9)
     plt.close(x9)
     
-    x10 = NCLEX_boxplot(NCLEX_df, 'Days Elapsed', 'Result')
+    x10 = ANOVA_boxplot(NCLEX_df, 'Days Elapsed', 'Result', ignore_outliers=True)
     pdf.savefig(x10)
     plt.close(x10)
     
-    x11 = histogram_NCLEX(NCLEX_df, field='Qtrs to Grad', year_list=['2010', '2011', '2012', '2013', '2014', '2015', '2016'])
+    x11 = histogram_NCLEX(NCLEX_df, 'Qtrs to Grad', ignore_outliers=True)
     pdf.savefig(x11)
     plt.close(x11)
     
-    x12 = NCLEX_boxplot(NCLEX_df, 'Qtrs to Grad', 'Result')
+    x12 = ANOVA_boxplot(NCLEX_df, 'Qtrs to Grad', 'Result', ignore_outliers=True)
     pdf.savefig(x12)
     plt.close(x12)
     
