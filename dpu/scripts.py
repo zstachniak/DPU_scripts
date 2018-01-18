@@ -71,8 +71,13 @@ def get_latest (pathname, filename, **kwargs):
             # Pop the latest file (i.e., remove from dictionary)
             file_list.append(file_dict.pop(latest))
         return file_list
-    
-def guess_current_term ():
+
+def get_term_descriptions ():
+    '''A function that returns a Pandas dataframe of all terms.'''
+    TermDescriptions = pd.read_excel('W:/csh/Nursing/Schedules/Term Descriptions.xlsx', header=0, converters={'Term':str})
+    return TermDescriptions
+
+def guess_current_term (TermDescriptions):
     '''A function that uses the current date to estimate what the current
     academic term should be. Assumes the following cross-over points:
     12/1 - winter
@@ -80,8 +85,6 @@ def guess_current_term ():
     6/10 - summer
     9/1 - fall
     '''
-    # Get term descriptions
-    TermDescriptions = pd.read_excel('W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx', header=0, converters={'Term':str})
     # Get the current date and year
     today = datetime.today()
     current_year = today.year
@@ -105,10 +108,10 @@ def guess_current_term ():
     term = TermDescriptions[(TermDescriptions['Academic Year'] == ay) & (TermDescriptions['Quarter'] == quarter)]['Term'].item()
     return term
 
-def get_cln (starting_path, term):
+def get_cln (term, TermDescriptions):
     '''A function to gather clinical rosters from path & term.'''
-    # Get term descriptions
-    TermDescriptions = pd.read_excel('W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx', header=0, converters={'Term':str})
+    # Starting Path
+    starting_path = 'W:\\csh\\Nursing Administration\\Clinical Placement Files'
     # Gather academic year and quarter
     ay = TermDescriptions[TermDescriptions['Term'] == term]['Academic Year'].item()
     q = TermDescriptions[TermDescriptions['Term'] == term]['Quarter'].item()
@@ -119,12 +122,10 @@ def get_cln (starting_path, term):
     clinical_roster = pd.read_excel(file, header=0, converters={'Term':str, 'Cr':str, 'Student ID':str})
     return clinical_roster
 
-def get_dir_of_schedule (term):
+def get_dir_of_schedule (term, TermDescriptions):
     '''A function to output a full directory path to a schedule.'''
     # Define schedule starting path
     starting_path = 'W:\\csh\\Nursing\\Schedules'
-    # Get term descriptions
-    TermDescriptions = pd.read_excel('W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx', header=0, converters={'Term':str})
     # Gather quarter
     q = TermDescriptions[TermDescriptions['Term'] == term]['Quarter'].item()
     # If Summer, increment term to account for fiscal year changeover
@@ -136,10 +137,10 @@ def get_dir_of_schedule (term):
     folder = os.path.join(starting_path, ay)
     return folder
 
-def get_schedule (starting_path, term):
+def get_schedule (term, TermDescriptions):
     '''A function to gather a quarterly schedule from path & term.'''
-    # Get term descriptions
-    TermDescriptions = pd.read_excel('W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx', header=0, converters={'Term':str})
+    # Define schedule starting path
+    starting_path = 'W:\\csh\\Nursing\\Schedules'
     # Gather quarter
     q = TermDescriptions[TermDescriptions['Term'] == term]['Quarter'].item()
     # If Summer, increment term to account for fiscal year changeover

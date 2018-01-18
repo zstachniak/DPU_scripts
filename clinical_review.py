@@ -35,9 +35,12 @@ def filter_schedule_for_cln (df, program_list):
 def main (term, campus):
     '''docstring'''
     
+    # Get Term Descriptions
+    TermDescriptions = dpu.get_term_descriptions()
+    
     # If a term is not passed, guess current
     if not term:
-        term = dpu.guess_current_term()
+        term = dpu.guess_current_term(TermDescriptions)
     # Ensure term is type str
     if type(term) is not str:
         term = str(term)
@@ -52,11 +55,8 @@ def main (term, campus):
         # Convert string to list so code execution can be parallel
         campus = [campus]
     
-    # Define schedule starting path
-    path = 'W:/csh/Nursing/Schedules'
-    
     # Get schedule
-    schedule = dpu.get_schedule(path, term)
+    schedule = dpu.get_schedule(term, TermDescriptions)
     
     # Filter out non-clinical courses
     schedule = filter_schedule_for_cln(schedule, campus)
@@ -65,7 +65,7 @@ def main (term, campus):
     schedule = schedule[['Cr', 'Sec', 'Time', 'Clinical Site', 'Unit', 'Max Cap', 'Confirmed', 'Faculty']]
         
     # Get output folder
-    output_folder = os.path.join(dpu.get_dir_of_schedule(term), 'Charts')
+    output_folder = os.path.join(dpu.get_dir_of_schedule(term, TermDescriptions), 'Charts')
     
     # Output file name
     output_file = os.path.join(output_folder, 'Clinical Review {}.xlsx'.format(term))
