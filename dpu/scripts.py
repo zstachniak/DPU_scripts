@@ -119,6 +119,23 @@ def get_cln (starting_path, term):
     clinical_roster = pd.read_excel(file, header=0, converters={'Term':str, 'Cr':str, 'Student ID':str})
     return clinical_roster
 
+def get_dir_of_schedule (term):
+    '''A function to output a full directory path to a schedule.'''
+    # Define schedule starting path
+    starting_path = 'W:/csh/Nursing/Schedules'
+    # Get term descriptions
+    TermDescriptions = pd.read_excel('W:/csh/Nursing/Schedules/Term Descriptions.xlsx', header=0, converters={'Term':str})
+    # Gather quarter
+    q = TermDescriptions[TermDescriptions['Term'] == term]['Quarter'].item()
+    # If Summer, increment term to account for fiscal year changeover
+    if q == 'Summer':
+        term = str(int(term) + 5)
+    # Gather academic year
+    ay = TermDescriptions[TermDescriptions['Term'] == term]['Academic Year'].item()
+    # Update file path
+    folder = os.path.join(starting_path, ay)
+    return folder
+
 def get_schedule (starting_path, term):
     '''A function to gather a quarterly schedule from path & term.'''
     # Get term descriptions
