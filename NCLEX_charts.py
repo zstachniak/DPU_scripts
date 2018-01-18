@@ -17,15 +17,7 @@ from scipy import stats
 from sklearn.ensemble import IsolationForest
 import os
 import click
-
-IL_Competitors = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\\Illinois Yearly Pass Rates for All Schools\\CompetitorPassRates.xlsx', sheet_name='Sheet1', header=0)
-
-school_abbr = {'DePaul University': 'DPU',
-               'Millikin University': 'Mlkn',
-               'Rush University': 'Rush',
-               'University of Illinois at Chicago': 'UIC',
-               'Elmhurst College': 'Elm'
-               }
+import re
 
 school_colors = {'DePaul University': '#396E93',
                'Millikin University': '#F0B67F',
@@ -42,40 +34,13 @@ campus_fail_colors = {'LPC': sns.color_palette("coolwarm", 7)[6],
                       'RFU': sns.color_palette("coolwarm", 7)[6]
                       }
 
-#Read NCLEX
-NCLEX = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\DataWarehouse\\OG_Data\\NCLEX_Results\\NCLEX.xlsx',header=0,converters={'Empl ID':str, 'Year':str})
-#Fill first zero where needed
-NCLEX['Empl ID'] = NCLEX['Empl ID'].str.zfill(7)
-#Drop unnecessary fields
-NCLEX.drop(['Last Name','First Name','Time Delivered', 'Candidate ID'],axis=1,inplace=True)
-#Add days elapsed since graduation
-NCLEX['Date Delivered'] = pd.to_datetime(NCLEX['Date Delivered'])
-NCLEX['Days Elapsed'] = NCLEX['Date Delivered'] - NCLEX['Graduation Date']
-NCLEX['Days Elapsed'] = NCLEX['Days Elapsed'].dt.days
-# Standardize Result
-result_map = {'FAIL': 'Fail',
-              'Fail': 'Fail',
-              'fail': 'Fail',
-              'PASS': 'Pass',
-              'Pass': 'Pass',
-              'pass': 'Pass'}
-NCLEX['Result'] = NCLEX['Result'].map(result_map)
-# Remove repeat test-takers
-NCLEX = NCLEX[NCLEX['Repeater'] == 'No']
 
-#Read Grad Data
-f = dpu.get_latest('W:/csh/Nursing Administration/Data Management/DataWarehouse/OG_Data/NSG_GRADS', 'NSG_GRAD_REVISED')
-Grad_data = pd.read_excel(f, skiprows=0, header=1, na_values='nan', converters={'ID':str, 'Admit Term':str, 'Compl Term': str})
-# Drop students in the wrong degree program (students who take more than
-# one program will be duplicated unnecessarily).
-Grad_data = Grad_data[Grad_data['Degree'] == 'MS']
-Grad_data = Grad_data[Grad_data['Acad Plan'].isin(['MS-NURSING', 'MS-GENRNSG'])]
-Grad_data = Grad_data[Grad_data['Sub-Plan'] != 'ANESTHESIS']
-'''Compute number of quarters taken to graduate by subtracting admit quarter
-# from graduation quarter. The quarters typically count by fives, but there
-# are several inconsistencies, which must be accounted for based on the range
-# of the terms.'''
+
 def qtrs(admit, grad):
+    '''Compute number of quarters taken to graduate by subtracting admit 
+    quarter from graduation quarter. The quarters typically count by fives,
+    but there are several inconsistencies, which must be accounted for based
+    on the range of the terms.'''
     admit = int(admit)
     grad = int(grad)
     if admit >= 860:
@@ -88,48 +53,27 @@ def qtrs(admit, grad):
         return ((grad - admit)/5) - 3
     else:
         return ((grad - admit)/5)
-Grad_data['Qtrs to Grad'] = Grad_data.apply(lambda x: qtrs(x['Admit Term'], x['Compl Term']), axis=1)
 
-# Combine NCLEX and Graduates into Temp dataframe
-NCLEX_df = pd.merge(NCLEX[['Empl ID', 'Campus', 'Result', 'Days Elapsed', 'Year', 'Quarter', 'Graduation Date']], Grad_data[['ID', 'GPA', 'Qtrs to Grad', 'Compl Term']], how='left', left_on='Empl ID', right_on='ID', sort=True, copy=True)
-# Drop degree and ID fields
-NCLEX_df = NCLEX_df.drop(['ID'],axis=1)
-'''We do not have the testing dates for students who take NCLEX out of state.
-#There are also a few oddities, where students test before they technically
-#receive their degrees. To avoid these five outlier cases from affecting 
-#our model, we will impute all NaN, 0, and negative values using the mean
-#of the group as a whole, rounded to the nearest unit value.'''
-elapsed = round(NCLEX_df.mean()['Days Elapsed'],0)
-NCLEX_df['Days Elapsed'].fillna(elapsed, inplace=True)
-NCLEX_df.loc[NCLEX_df['Days Elapsed'] <= 0, 'Days Elapsed'] = elapsed
-
-def historical_line_NCLEX (historical_rates, school_list=None, year_list=None, show_vals=None):
-    '''Creates a line graph that displays the NCLEX pass rates of IL Master's
-    Entry to Nursing Practice programs over time. User can select schools
-    or particular years.'''
+def historical_line (df, x_field, y_field, groupby_field, **kwargs):
+    '''Creates a line graph that displays a pass rates by year.
     
-    #Create list of programs
-    if school_list == None:
-        schools = historical_rates["Master's Entry Program"].unique().tolist()
-    else:
-        schools = []
-        if type(school_list) is str:
-            schools.append(school_list)
-        else:
-            for s in school_list:
-                schools.append(s)
-    schools.sort()
     
-    #Create list of years
-    if year_list == None:
-        years = historical_rates["Year"].unique().tolist()
-    else:
-        years = []
-        if type(year_list) is str:
-            years.append(year_list)
-        else:
-            for y in year_list:
-                years.append(y)
+    x_field: e.g., "Year"
+    y_field: e.g., "Pass Rate"
+    groupby: e.g., "Master's Entry Program"
+    
+    
+    show_vals: options are "all" or "last". Default to None.
+    '''
+    # Gather optional keyword arguments
+    title = kwargs.pop('title', "{} by {} for {}".format(y_field, x_field, groupby_field))
+    y_lim = kwargs.pop('y_lim', None)
+    years = kwargs.pop('years', df["Year"].unique().tolist())
+    show_vals = kwargs.pop('show_vals', None)
+    groupby_vals = kwargs.pop('groupby_vals', df[groupby_field].unique().tolist())
+    
+    # Coerce years into a list
+    years = coerce_to_list(years)
     years.sort()
     
     #Set defaults
@@ -141,51 +85,42 @@ def historical_line_NCLEX (historical_rates, school_list=None, year_list=None, s
     yr = np.arange(len(years))
     
     #Iterate through schools and years to capture pass rates
-    for school in schools:
-        Pass_Rate = []
+    for group in groupby_vals:
+        rate = []
         for year in years:
-            Pass_Rate.append(historical_rates[(historical_rates["Master's Entry Program"] == school) & (historical_rates["Year"] == year)].sum()['Pass Rate'])
+            rate.append(df[(df[groupby_field] == group) & (df[x_field] == year)].sum()[y_field])
         
         #Replace 0 values with NaNs so that programs that didn't exist yet
         #will not show up in the chart.
-        Pass_Rate = [np.nan if x == 0 else x for x in Pass_Rate]
+        rate = [np.nan if x == 0 else x for x in rate]
         
         #Plot each line
-        ax.plot(yr, Pass_Rate, '-o', color=school_colors[school], label=school)
+        ax.plot(yr, rate, '-o', color=school_colors[group], label=group)
         
         if show_vals == 'all':
-            for i,j in zip(yr, Pass_Rate):
+            for i,j in zip(yr, rate):
                 ax.annotate(str(j), xy=(i,j), xytext=(0,8), textcoords='offset points')
         elif show_vals == 'last':
             i = (len(yr)-1)
-            j = Pass_Rate[i]
+            j = rate[i]
             ax.annotate(str(j), xy=(i,j), xytext=(0,8), textcoords='offset points')
     
     #Chart formatting
-    ax.set_title("Yearly Pass Rates of IL Master's Entry Programs")
-    ax.set_ylabel('Pass Rate')
-    ax.set_xlabel('Calendar Year')
+    ax.set_title(title)
+    ax.set_ylabel(y_field)
+    ax.set_xlabel(x_field)
     ax.set_xticks(yr)
     ax.set_xticklabels(years) 
     ax.legend(loc='lower left')
-    
     axes = plt.gca()
-    axes.set_ylim([70,101])
+    axes.set_ylim(y_lim)
         
-    #plt.show()
     return fig
 
-#historical_line_NCLEX(IL_Competitors, school_list='DePaul University')
-#historical_line_NCLEX(IL_Competitors, school_list='DePaul University', show_vals='last')
-#historical_line_NCLEX(IL_Competitors, school_list='DePaul University', show_vals='all')
-#historical_line_NCLEX(IL_Competitors, show_vals='last')
+#historical_line(IL_Competitors, "Year", "Pass Rate", "Master's Entry Program", groupby_vals=['DePaul University'], show_vals='all', y_lim=[70,101])
 
 def stacked_bar_NCLEX (historical_rates, school_list=None, year_list=None):
-    '''Creates stacked bar chart(s) that indicate the number of TEs assigned
-    to full-time, part-time, or TBA faculty for each course in a given
-    program and term. In addition to a schedule, user may pass either a
-    string or a list of strings for program, term, or course, and the charts
-    created will be focused accordingly.'''
+    '''Creates stacked bar chart(s) that compare school pass rates.'''
     
     #Create list of programs
     if school_list == None:
@@ -255,9 +190,9 @@ def stacked_bar_NCLEX (historical_rates, school_list=None, year_list=None):
         
     description_legend = ['{0} Pass/Fail: {1}/{2}={3:.0f}%'.format(x, pass_n[x], (pass_n[x]+fail_n[x]), ((pass_n[x]/(pass_n[x]+fail_n[x]))*100)) for x in schools]
 
-    #Create a list of course type abbreviations
-    #Add a blank string to account for padding
-    m_lab = list(map(school_abbr.get, schools))
+    # Create a list of abbreviations
+    m_lab = [re.sub(r'[^A-Z]', '', x) for x in schools]
+    # Add a blank string to account for padding
     m_lab.append('')
     
     #Set the minor ticks and labels            
@@ -360,7 +295,7 @@ def scatter_trend (df, x_field, y_field, groupby_field, **kwargs):
     #Plot it
     return(fig)
 
-scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", x_vals=np.arange(2010,2018), groupby_vals='DePaul University', groupby_colors=['#396E93'], y_lim=[70,101])
+#scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", x_vals=np.arange(2010,2018), groupby_vals='DePaul University', groupby_colors=['#396E93'], y_lim=[70,101])
 #scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", x_vals=np.arange(2010,2018), groupby_vals=['DePaul University', 'Rush University'], groupby_colors=['#396E93', '#80AA69'], y_lim=[70,101])
 
 def histogram_NCLEX (df, field, **kwargs):
@@ -454,7 +389,7 @@ def histogram_NCLEX (df, field, **kwargs):
         if df[(df[field] >= x) & (df[field] < (x + counter))].count()['Result'] == 0:
             pass_rate.append(0)
         else:
-            pass_rate.append(df[(df[field] >= x) & (df[field] < (x + counter)) & (df['Result'] == 'Pass')].count()['Result'] / df[(df[field] >= x) & (df[field] < (x + counter))].count()['Result'])
+            pass_rate.append(df[(df[field] >= x) & (df[field] < (x + counter)) & (df['Result'] == 'pass')].count()['Result'] / df[(df[field] >= x) & (df[field] < (x + counter))].count()['Result'])
     
     # Plot histogram with pass rates as y axis
     x2.bar(x_pos, pass_rate, align='edge', edgecolor='black', width=1, alpha=0.75)
@@ -621,11 +556,11 @@ def stacked_bar_campus (df, year=None, quarter_list=None):
         #Build stacked bars for each year
         for j,campus in enumerate(campuses):
             
-            p = df[(df["Campus"] == campus) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'Pass')].count()['Result']
+            p = df[(df["Campus"] == campus) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'pass')].count()['Result']
             pass_n[campus] += p
             Pass_bar = ax.bar(cmp[j], p, color=campus_pass_colors[campus], label='Pass')
                   
-            f = df[(df["Campus"] == campus) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'Fail')].count()['Result']
+            f = df[(df["Campus"] == campus) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'fail')].count()['Result']
             fail_n[campus] += f
             Fail_bar = ax.bar(cmp[j], f, color=campus_fail_colors[campus], bottom=p, label='Fail')
             
@@ -729,11 +664,11 @@ def stacked_bar_cohort (df, year=None, quarter_list=None, sortby='campus'):
             
         #Build stacked bars for each year
         for j,cohort in enumerate(cohorts):
-            p = df[(df[sortby] == cohort) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'Pass')].count()['Result']
+            p = df[(df[sortby] == cohort) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'pass')].count()['Result']
             pass_n[cohort] += p
             Pass_bar = ax.bar(cmp[j], p, color=colormap[j], label='Pass')
                   
-            f = df[(df[sortby] == cohort) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'Fail')].count()['Result']
+            f = df[(df[sortby] == cohort) & (df["Year"] == year) & (df["Quarter"] == quarter) & (df["Result"] == 'fail')].count()['Result']
             fail_n[cohort] += f
             Fail_bar = ax.bar(cmp[j], f, color=colormap[-(j+1)], bottom=p, label='Fail')
             
@@ -791,16 +726,59 @@ def stacked_bar_cohort (df, year=None, quarter_list=None, sortby='campus'):
 )
 def main(year):
     '''Main function.'''
+    today = datetime.today()
     # If the user did not pass a year, use current year
     if not year:
-        today = datetime.today()
         year = str(today.year)
+        
+    # Gather list of yearly IL pass rates
+    IL_Competitors = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\\Illinois Yearly Pass Rates for All Schools\\CompetitorPassRates.xlsx', sheet_name='Sheet1', header=0)
+    
+    # DPU NCLEX pass data
+    NCLEX = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\DataWarehouse\\OG_Data\\NCLEX_Results\\NCLEX.xlsx',header=0,converters={'Empl ID':str, 'Year':str})
+    #Fill first zero where needed
+    NCLEX['Empl ID'] = NCLEX['Empl ID'].str.zfill(7)
+    #Drop unnecessary fields
+    NCLEX.drop(['Last Name','First Name','Time Delivered', 'Candidate ID'],axis=1,inplace=True)
+    #Add days elapsed since graduation
+    NCLEX['Date Delivered'] = pd.to_datetime(NCLEX['Date Delivered'])
+    NCLEX['Days Elapsed'] = NCLEX['Date Delivered'] - NCLEX['Graduation Date']
+    NCLEX['Days Elapsed'] = NCLEX['Days Elapsed'].dt.days
+    # Standardize Result
+    NCLEX['Result'] = NCLEX['Result'].map(lambda x: x.lower())
+    # Remove repeat test-takers
+    NCLEX = NCLEX[NCLEX['Repeater'] == 'No']
+    
+    # Read Grad Data
+    f = dpu.get_latest('W:/csh/Nursing Administration/Data Management/DataWarehouse/OG_Data/NSG_GRADS', 'NSG_GRAD_REVISED')
+    Grad_data = pd.read_excel(f, skiprows=0, header=1, na_values='nan', converters={'ID':str, 'Admit Term':str, 'Compl Term': str})
+    # Drop students in the wrong degree program (students who take more than
+    # one program will be duplicated unnecessarily).
+    Grad_data = Grad_data[Grad_data['Degree'] == 'MS']
+    Grad_data = Grad_data[Grad_data['Acad Plan'].isin(['MS-NURSING', 'MS-GENRNSG'])]
+    Grad_data = Grad_data[Grad_data['Sub-Plan'] != 'ANESTHESIS']
+    # Determine number of quarters between admit and completion
+    Grad_data['Qtrs to Grad'] = Grad_data.apply(lambda x: qtrs(x['Admit Term'], x['Compl Term']), axis=1)
+
+    # Combine NCLEX and Graduates into Temp dataframe
+    NCLEX_df = pd.merge(NCLEX[['Empl ID', 'Campus', 'Result', 'Days Elapsed', 'Year', 'Quarter', 'Graduation Date']], Grad_data[['ID', 'GPA', 'Qtrs to Grad', 'Compl Term']], how='left', left_on='Empl ID', right_on='ID', sort=True, copy=True)
+    # Drop degree and ID fields
+    NCLEX_df = NCLEX_df.drop(['ID'],axis=1)
+    '''We do not have the testing dates for students who take NCLEX out of
+    state. There are also a few oddities, where students test before they
+    technically receive their degrees. To avoid these outlier cases from
+    affecting our data, we will impute all NaN, 0, and negative values 
+    using the mean of the group as a whole, rounded to the nearest unit
+    value.'''
+    elapsed = round(NCLEX_df.mean()['Days Elapsed'],0)
+    NCLEX_df['Days Elapsed'].fillna(elapsed, inplace=True)
+    NCLEX_df.loc[NCLEX_df['Days Elapsed'] <= 0, 'Days Elapsed'] = elapsed
         
     # Build all the graphs
     graphs = [
-            historical_line_NCLEX(IL_Competitors, school_list='DePaul University', show_vals='all'),
+            historical_line(IL_Competitors, "Year", "Pass Rate", "Master's Entry Program", groupby_vals=['DePaul University'], show_vals='all', y_lim=[70,101]),
             
-            historical_line_NCLEX(IL_Competitors),
+            historical_line(IL_Competitors, "Year", "Pass Rate", "Master's Entry Program", y_lim=[70,101]),
             
             scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", groupby_vals='DePaul University', groupby_colors=['#396E93'], y_lim=[70,101]),
                                                                                                                                                                                                     
