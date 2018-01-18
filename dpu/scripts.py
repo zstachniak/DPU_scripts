@@ -122,9 +122,9 @@ def get_cln (starting_path, term):
 def get_dir_of_schedule (term):
     '''A function to output a full directory path to a schedule.'''
     # Define schedule starting path
-    starting_path = 'W:/csh/Nursing/Schedules'
+    starting_path = 'W:\\csh\\Nursing\\Schedules'
     # Get term descriptions
-    TermDescriptions = pd.read_excel('W:/csh/Nursing/Schedules/Term Descriptions.xlsx', header=0, converters={'Term':str})
+    TermDescriptions = pd.read_excel('W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx', header=0, converters={'Term':str})
     # Gather quarter
     q = TermDescriptions[TermDescriptions['Term'] == term]['Quarter'].item()
     # If Summer, increment term to account for fiscal year changeover
