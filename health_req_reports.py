@@ -13,156 +13,6 @@ from fuzzywuzzy import fuzz, process
 import re
 import dpu.scripts as dpu
 
-#############################################################
-# Functions
-#############################################################
-
-def get_latest (pathname, filename, **kwargs):
-    '''Scans the pathname folder for all files that match the typical 
-    naming conventions of "filename". For those files, function parses 
-    file name to look for a suffix to indicate date edited, then returns
-    the file name with the latest date.
-    
-    @ Optional Keyword Arguments:
-    ----------------------
-    date_format: indicate a date format for files (default: '%Y-%m-%d')
-    num_files: number of files to return (if more than one, in ordered list)
-    ignore_suffix: an additional file suffix to ignore
-    '''
-    # Gather optional keyword arguments
-    date_format = kwargs.pop('date_format', '%Y-%m-%d')
-    num_files= kwargs.pop('num_files', 1)
-    ignore_suffix = kwargs.pop('ignore_suffix', None)    
-    #Set up storage dict
-    file_dict = {}
-    # Iterate through objects in directory
-    for name in os.listdir(pathname):
-        # Concatenate the path with the object name
-        subname = os.path.join(pathname, name)
-        #Checks for standard naming conventions and ignores file fragments
-        if os.path.isfile(subname) and filename in subname and '~$' not in subname:
-            # Split into name and extension
-            f_name, ext = os.path.splitext(subname)
-            if ignore_suffix:
-                # Ignore files that end in user-identified suffix
-                if f_name.endswith(ignore_suffix):
-                    continue
-            else:
-                # Determine the expected string length of date
-                date_length = len(datetime.now().strftime(date_format))                    
-                # Gather expected date portion
-                date_suffix = f_name[-date_length:]
-                # Attempt to convert to datetime and add to file_dict
-                try:
-                    date_time = datetime.strptime(date_suffix, date_format).date()
-                    file_dict[date_time] = subname
-                except:
-                    print('{} does not meet expected date convention and has been skipped.'.format(f_name))         
-    # If no files found, exit function
-    if len(file_dict) == 0:
-        return 'No files were found'
-    # Gather the most recent date in dictionary keys
-    latest = max(list(file_dict.keys()))
-    # If only one file is requested OR there is only one file found, return
-    if num_files == 1 or len(file_dict) == 1:
-        return file_dict[latest]
-    else:
-        file_list = [file_dict.pop(latest)]
-        while len(file_list) < num_files and len(file_dict) != 0:
-            # Gather the new latest file
-            latest = max(list(file_dict.keys()))
-            # Pop the latest file (i.e., remove from dictionary)
-            file_list.append(file_dict.pop(latest))
-        return file_list
-    
-def guess_current_term ():
-    '''A function that uses the current date to estimate what the current
-    academic term should be. Assumes the following cross-over points:
-    12/1 - winter
-    3/25 - spring
-    6/10 - summer
-    9/1 - fall
-    '''
-    # Get the current date and year
-    today = datetime.today()
-    current_year = today.year
-    # Determine which cross-over points have been reached to assign quarter
-    # For end of year dates, we increment year by one to reach correct ay
-    if today > datetime(current_year, 12, 1):
-        quarter = 'Winter'
-        current_year += 1
-    elif today > datetime(current_year, 9, 1):
-        quarter = 'Autumn'
-        current_year += 1
-    elif today > datetime(current_year, 6, 10):
-        quarter = 'Summer'
-    elif today > datetime(current_year, 3, 25):
-        quarter = 'Spring'
-    else:
-        quarter = 'Winter'
-    # Assign academic year from current year + quarter
-    ay = f'{current_year - 1}-{current_year}'
-    # Get current term from TermDescriptions
-    term = TermDescriptions[(TermDescriptions['Academic Year'] == ay) & (TermDescriptions['Quarter'] == quarter)]['Term'].item()
-    return term
-
-def get_cln (starting_path, term):
-    '''A function to gather clinical rosters from path & term.'''
-    # Gather academic year and quarter
-    ay = TermDescriptions[TermDescriptions['Term'] == term]['Academic Year'].item()
-    q = TermDescriptions[TermDescriptions['Term'] == term]['Quarter'].item()
-    # Update file path
-    folder = os.path.join(starting_path, ay, q)
-    file = get_latest(folder, 'Clinical Roster')
-    # Read data
-    clinical_roster = pd.read_excel(file, header=0, converters={'Term':str, 'Cr':str, 'Student ID':str})
-    return clinical_roster
-
-def get_schedule (starting_path, term):
-    '''A function to gather a quarterly schedule from path & term.'''
-    # Gather quarter
-    q = TermDescriptions[TermDescriptions['Term'] == term]['Quarter'].item()
-    # If Summer, increment term to account for fiscal year changeover
-    if q == 'Summer':
-        term = str(int(term) + 5)
-    # Gather academic year
-    ay = TermDescriptions[TermDescriptions['Term'] == term]['Academic Year'].item()
-    # Update file path
-    folder = os.path.join(starting_path, ay)
-    file = get_latest(folder, 'Fiscal Schedule', date_format='%m-%d-%Y')
-    # Read data
-    schedule = pd.read_excel(file, sheet_name=q, header=0,converters={'Cr':str, 'Term':str})
-    return schedule
-
-
-
-
-def find_best_string_match (query, choices, **kwargs):
-    '''This function takes a single query and a list of possible
-    choices and ranks the choices to find the most likely match.
-    Rankings are calculated via fuzzywuzzy ratios, and can be
-    passed directly by the user via optional keyword.'''
-    # Optional argument to test only certain scorers
-    scorers = kwargs.pop('scorers', [fuzz.ratio, fuzz.partial_ratio, fuzz.token_sort_ratio, fuzz.token_set_ratio])
-    # Initialize a dictionary to store scoring
-    score_mapping = {}
-    for key in choices:
-        score_mapping[key] = []
-    # Test for each scorer
-    for scorer in scorers:
-        # Store temporary results as list of tuples
-        temp_results = process.extract(query, choices, scorer=scorer, limit=None)
-        # Add scores to mapping
-        for (key, score) in temp_results:
-            score_mapping[key].append(score)
-    # Sum all results for each key
-    for key in score_mapping.keys():
-        score_mapping[key] = sum(score_mapping[key])
-    # Determine the maximum scored
-    result = max(score_mapping, key=lambda key: score_mapping[key])
-    return result
-
-
 folders = {'reports': 'W:\\csh\\Nursing\\Clinical Placements\\Castle Branch and Health Requirements\\Reporting\\Downloaded Reports',
            'students': 'W:\\csh\\Nursing\\Student Records',
            'schedule': 'W:\\csh\\Nursing\\Schedules',
@@ -170,10 +20,10 @@ folders = {'reports': 'W:\\csh\\Nursing\\Clinical Placements\\Castle Branch and 
            }
 
 # Get the latest reports
-noncompliant_files = get_latest(folders['reports'], 'Noncompliant', num_files=2)
-compliant_files = get_latest(folders['reports'], 'Compliant', num_files=2)
+noncompliant_files = dpu.get_latest(folders['reports'], 'Noncompliant', num_files=2)
+compliant_files = dpu.get_latest(folders['reports'], 'Compliant', num_files=2)
 
-files = {'students': get_latest(folders['students'], 'Student List'),
+files = {'students': dpu.get_latest(folders['students'], 'Student List'),
          'faculty': 'W:\\csh\\Nursing\\Faculty\\Employee List.xlsx',
          'terms': 'W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx',
          'noncompliant_curr': noncompliant_files[0],
@@ -204,12 +54,43 @@ students.drop_duplicates(subset='Emplid', inplace=True)
 # Get the faculty list
 faculty = pd.read_excel(files['faculty'], header=0, converters={'Empl ID': str,})
 # Get term descriptions
-TermDescriptions = pd.read_excel(files['terms'], header=0, converters={'Term':str})
+TermDescriptions = dpu.get_term_descriptions()
 # Get current term
-current_term = guess_current_term()
+current_term = dpu.guess_current_term(TermDescriptions)
 # Get clinical roster and schedule
-clinical_roster = get_cln (folders['clinical'], current_term)
-schedule = get_schedule (folders['schedule'], current_term)
+schedule = dpu.get_schedule(current_term, TermDescriptions)
+clinical_roster = dpu.get_cln(current_term, TermDescriptions)
+
+
+# Drop unneeded columns
+clinical_roster.drop(labels=clinical_roster.columns[12:], axis=1, inplace=True)
+clinical_roster.drop(labels=clinical_roster.columns[8:11], axis=1, inplace=True)
+# Gather list of duplicates (i.e., student has more than one clinical course)
+dupe_truth_value = clinical_roster.duplicated(subset=['Student ID'], keep='first')
+dupes = clinical_roster.loc[dupe_truth_value]
+dupes.drop(labels=['Term'], axis=1, inplace=True)
+# Drop duplicates from original list
+clinical_roster.drop_duplicates(subset=['Student ID'], keep='first', inplace=True)
+# Merge two lists 
+clinical_roster = pd.merge(clinical_roster, dupes, how='left', on='Student ID', suffixes=['_1', '_2'])
+# Put student ID at start
+clinical_roster.insert(0, 'Emplid', clinical_roster['Student ID'])
+clinical_roster.drop(labels=['Student ID'], axis=1, inplace=True)
+# Merge with student data
+clinical_roster = pd.merge(clinical_roster, students[['Emplid', 'Last Name', 'First Name', 'Campus', 'Email', 'Best Phone']], how='left', on='Emplid')
+# Reorder columns
+cols = ['Emplid', 'Last Name', 'First Name', 'Campus', 'Email', 'Best Phone', 'Term', 'Cr_1', 'Sec_1', 'Clinical Site_1', 'Unit_1', 'Date_1', 'Time_1', 'Instructor_1', 'Cr_2', 'Sec_2', 'Clinical Site_2', 'Unit_2', 'Date_2', 'Time_2', 'Instructor_2']
+clinical_roster = clinical_roster.reindex(columns= cols)
+
+
+# Get instructor data
+
+
+
+
+
+
+
 
 
 
