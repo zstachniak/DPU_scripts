@@ -119,32 +119,11 @@ def historical_line (df, x_field, y_field, groupby_field, **kwargs):
 
 #historical_line(IL_Competitors, "Year", "Pass Rate", "Master's Entry Program", groupby_vals=['DePaul University'], show_vals='all', y_lim=[70,101])
 
-def stacked_bar_NCLEX (historical_rates, school_list=None, year_list=None):
+def stacked_bar_NCLEX (historical_rates, **kwargs):
     '''Creates stacked bar chart(s) that compare school pass rates.'''
-    
-    #Create list of programs
-    if school_list == None:
-        schools = historical_rates["Master's Entry Program"].unique().tolist()
-    else:
-        schools = []
-        if type(school_list) is str:
-            schools.append(school_list)
-        else:
-            for s in school_list:
-                schools.append(s)
-    schools.sort()
-    
-    #Create list of years
-    if year_list == None:
-        years = historical_rates["Year"].unique().tolist()
-    else:
-        years = []
-        if type(year_list) is str:
-            years.append(year_list)
-        else:
-            for y in year_list:
-                years.append(y)
-    years.sort()
+    # Gather optional keyword arguments
+    schools = kwargs.pop('school_list', historical_rates["Master's Entry Program"].unique().tolist())
+    years = kwargs.pop('year_list', historical_rates["Year"].unique().tolist())
     
     #Set defaults
     plt.rcdefaults()
@@ -721,15 +700,19 @@ def stacked_bar_cohort (df, year=None, quarter_list=None, sortby='campus'):
 #############################################################
 @click.command()
 @click.option(
-        '--year',
-        help='The year through which you want to focus your inquiry, e.g. "2018"',
+        '--max_year',
+        help='The max year through which you want to focus your inquiry, e.g. "2018"',
 )
-def main(year):
+@click.option(
+        '--min_year',
+        help='The min year through which you want to focus your inquiry, e.g. "2010"',
+)
+def main(max_year, min_year):
     '''Main function.'''
     today = datetime.today()
-    # If the user did not pass a year, use current year
-    if not year:
-        year = str(today.year)
+    # If the user did not pass a max_year, use current year
+    if not max_year:
+        max_year = str(today.max_year)
         
     # Gather list of yearly IL pass rates
     IL_Competitors = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\\Illinois Yearly Pass Rates for All Schools\\CompetitorPassRates.xlsx', sheet_name='Sheet1', header=0)
@@ -773,18 +756,26 @@ def main(year):
     elapsed = round(NCLEX_df.mean()['Days Elapsed'],0)
     NCLEX_df['Days Elapsed'].fillna(elapsed, inplace=True)
     NCLEX_df.loc[NCLEX_df['Days Elapsed'] <= 0, 'Days Elapsed'] = elapsed
-        
+    
+    # If the user did not pass a min_year, use earliest year in data
+    if not min_year:
+        all_years = NCLEX_df['Year'].unique().tolist()
+        all_years.sort()
+        min_year = all_years[0]
+    
+    # Build a list of all years to consider
+    year_list_int = np.arange(int(min_year), int(max_year)+1)
+    year_list_str = [str(x) for x in year_list_int]
+
     # Build all the graphs
     graphs = [
-            historical_line(IL_Competitors, "Year", "Pass Rate", "Master's Entry Program", groupby_vals=['DePaul University'], show_vals='all', y_lim=[70,101]),
+            historical_line(IL_Competitors, "Year", "Pass Rate", "Master's Entry Program", groupby_vals=['DePaul University'], show_vals='all', y_lim=[70,101], years=year_list_int),
             
-            historical_line(IL_Competitors, "Year", "Pass Rate", "Master's Entry Program", y_lim=[70,101]),
-            
-            scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", groupby_vals='DePaul University', groupby_colors=['#396E93'], y_lim=[70,101]),
+            historical_line(IL_Competitors, "Year", "Pass Rate", "Master's Entry Program", y_lim=[70,101], years=year_list_int),
                                                                                                                                                                                                     
-            scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", groupby_vals=['DePaul University', 'Rush University', 'University of Illinois at Chicago'], groupby_colors=['#396E93', '#80AA69', '#4C443C'], y_lim=[70,101]),
+            scatter_trend(IL_Competitors, 'Year', 'Pass Rate', "Master's Entry Program", title="Yearly Pass Rates of IL Master's Entry Programs", groupby_vals=['DePaul University', 'Rush University'], groupby_colors=['#396E93', '#80AA69'], y_lim=[70,101], x_vals=year_list_int),
                           
-            stacked_bar_NCLEX(IL_Competitors, school_list=['DePaul University','Rush University']),
+            stacked_bar_NCLEX(IL_Competitors, school_list=['DePaul University','Rush University'], year_list=year_list_int),
             
             histogram_NCLEX(NCLEX_df, 'GPA', ignore_outliers=False),
             
@@ -792,18 +783,9 @@ def main(year):
             
             histogram_NCLEX(NCLEX_df, 'Days Elapsed', ignore_outliers=True),
             
-            ANOVA_boxplot(NCLEX_df, 'Days Elapsed', 'Result', ignore_outliers=True),
+            ANOVA_boxplot(NCLEX_df, 'Days Elapsed', 'Result', ignore_outliers=True)
             
-            histogram_NCLEX(NCLEX_df, 'Qtrs to Grad', ignore_outliers=True),
-            
-            ANOVA_boxplot(NCLEX_df, 'Qtrs to Grad', 'Result', ignore_outliers=True)
             ]
-    
-
-    '''
-    x13 = stacked_bar_campus(NCLEX_df, year=None, quarter_list=None)
-    x17 = stacked_bar_cohort(NCLEX_df, year=None, quarter_list=None, sortby='Compl Term')
-    '''
     
     # Open a PDF file
     with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\Reports\\NCLEX_Charts {}.pdf'.format(today.strftime('%Y-%m-%d'))) as pdf:
