@@ -20,6 +20,28 @@ def filter_schedule_for_cln (df, program_list):
     df = df[(df['Program'].isin(program_list)) & (df['Cr'].isin(cln_list)) & (~df['Type'].isin(['LEC', 'COORD']))].copy(deep=True)
     return df
 
+cln_progression = {'301': '332',
+                   '302': '301',
+                   '303': '302',
+                   '307': '303', 
+                   '440': '307',
+                   '441': '307',
+                   '442': '440',
+                   '472': '440',
+                   '443': '442'}
+
+def get_prev_enrl (row, df, prev_term):
+    '''docstring'''
+    # First, determine appropriate campus from section number
+    campus = row['Sec'][0]
+    prev_cr = cln_progression.get(row['Cr'], None)
+    # Get previous course
+    while int(row['Term']) - int(prev_term) != 5:
+        prev_cr = cln_progression.get(prev_cr, None)
+        prev_term = str(int(prev_term) + 5)
+    # Return count
+    return len(df[(df['Cr'] == prev_cr) & (df['Sec'].apply(lambda x: x.startswith(campus)))])
+
 #############################################################
 # Main
 #############################################################
@@ -62,8 +84,18 @@ def main (term, campus):
     schedule = filter_schedule_for_cln(schedule, campus)
     
     # Reorder and filter out unncessary data
-    schedule = schedule[['Cr', 'Sec', 'Time', 'Clinical Site', 'Unit', 'Max Cap', 'Confirmed', 'Faculty']]
-        
+    schedule = schedule[['Term', 'Cr', 'Sec', 'Time', 'Clinical Site', 'Unit', 'Max Cap', 'Confirmed', 'Faculty']]
+    
+    # Get previous clinical roster
+    prev_term = str(int(term) - 5)
+    try:
+        prev_cln_roster = dpu.get_cln(prev_term, TermDescriptions)
+    except:
+        prev_term = str(int(prev_term) - 5)
+        prev_cln_roster = dpu.get_cln(prev_term, TermDescriptions)
+    # Get previous enrollment numbers
+    schedule['Prev Cr Enrl'] = schedule.apply(get_prev_enrl, axis=1, args=(prev_cln_roster, prev_term))
+    
     # Get output folder
     output_folder = os.path.join(dpu.get_dir_of_schedule(term, TermDescriptions), 'Charts')
     
