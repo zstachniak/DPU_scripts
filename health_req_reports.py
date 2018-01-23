@@ -35,17 +35,23 @@ files = {'students': dpu.get_latest(folders['students'], 'Student List'),
 
 to_datetime = lambda d: datetime.strptime(d, '%m/%d/%Y')
 
+def read_cb (file):
+    '''Function to load Castle Branch report'''
+    temp = pd.read_csv(file, header=0, converters={'Order Submission Date': to_datetime})
+    temp.rename(columns={'Email Address':'Email'}, inplace=True)
+    return temp
+
 # Get the two most recent reports
-noncompliant_curr = pd.read_csv(files['noncompliant_curr'], header=0, converters={'Order Submission Date': to_datetime})
-noncompliant_prev = pd.read_csv(files['noncompliant_prev'], header=0, converters={'Order Submission Date': to_datetime})
+noncompliant_curr = read_cb(files['noncompliant_curr'])
+noncompliant_prev = read_cb(files['noncompliant_prev'])
+
 # Get a change log
-changelog = pd.merge(noncompliant_curr, noncompliant_prev, on=noncompliant_curr.columns.tolist(), how='outer', indicator=True).query("_merge != 'both'").drop('_merge', 1)
+noncompliant_changelog = pd.merge(noncompliant_curr, noncompliant_prev, on=noncompliant_curr.columns.tolist(), how='outer', indicator=True).query("_merge != 'both'").drop('_merge', 1)
 
+compliant_curr = read_cb(files['compliant_curr'])
+compliant_prev = read_cb(files['compliant_prev'])
 
-
-
-compliant_curr = pd.read_csv(files['compliant_curr'], header=0, converters={'Order Submission Date': to_datetime, 'Date of Compliance': to_datetime})
-compliant_prev = pd.read_csv(files['compliant_prev'], header=0, converters={'Order Submission Date': to_datetime, 'Date of Compliance': to_datetime})
+compliant_changelog = pd.merge(compliant_curr, compliant_prev, on=compliant_curr.columns.tolist(), how='outer', indicator=True).query("_merge != 'both'").drop('_merge', 1)
 
 
 # Get the latest student list
@@ -137,56 +143,92 @@ historical_students.reset_index(drop=True, inplace=True)
 
 '''Here we attempt to connect all students in the clinical roster with
 an account in Castle Branch. To do so, we make a dictionary lookup.
-# dict[Last Name, First Name, Email] = (Last Name, First Name, Email)
+# dict[Emplid] = (Last Name, First Name, Email)
 '''
 cb_to_dpu = {}
+
+def true_match (row, df, field_list):
+    '''Function to handle true matches'''
+    for field in field_list:
+        df = df[df[field].apply(lambda x: x.lower().strip()) == row[field].lower().strip()]
+    return df
+
+def partial_name_match (query, possibilities):
+    '''If names are set matches, return other name'''
+    temp = process.extract(query, possibilities, scorer=fuzz.token_set_ratio)
+    if temp[0][1] == 100:
+        return temp[0][0]
+    else:
+        return query
+
+def gather_output (result):
+    '''Standardize gathering data'''
+    # If more than one result, simply take the first
+    res = result.iloc[0]
+    # Return required fields
+    return res['Last Name'], res['First Name'], res['Email']
 
 def match_students (row, df, output_dict, **kwargs):
     '''docstring'''
     # Gather optional keyword arguments
     historic = kwargs.pop('historic', None)
-    # Turn student into a tuple
-    student = (row['Last Name'], row['First Name'], row['Email'])
+    # Save student ID
+    student = row['Emplid']
     # Check to see that student has not already been matched
     if student not in output_dict.keys():
         # Attempt a true match on email address
-        res = df[df['Email Address'].apply(lambda x: x.lower()) == row['Email'].lower()]
-        # If successful, add to dictionary
-        if len(res) == 1:
-            output_dict[student] = (res['Last Name'].item(), res['First Name'].item(), res['Email Address'].item())
-            return
-        # Else, attempt a true match on Last, First
-        else:
-            res = df[(df['Last Name'].apply(lambda x: x.lower()) == row['Last Name'].lower()) & (df['First Name'].apply(lambda x: x.lower()) == row['First Name'].lower())]
+        res = true_match(row, df, ['Email'])
+        if len(res) >= 1:
             # If successful, add to dictionary
-            if len(res) == 1:
-                output_dict[student] = (res['Last Name'].item(), res['First Name'].item(), res['Email Address'].item())
+            output_dict[student] = gather_output(res)
+            return
+        else:
+            # Else, attempt a true match on Last, First
+            res = true_match(row, df, ['Last Name', 'First Name'])
+            if len(res) >= 1:
+                # If successful, add to dictionary
+                output_dict[student] = gather_output(res)
+                return
             else:
                 # If user requests, test against possible historic data
                 if historic is not None:
                     # Search for previous (i.e., different) matches by ID
-                    previous = historic[historic['Emplid'] == row['Emplid']]
-                    # If a match exists
+                    previous = true_match(row, historic, ['Emplid'])
                     if len(previous) > 0:
-                        # Try out each match
+                        # If a match exists, try out each match
                         for idx in range(len(previous)):
-                            # Gather data
                             prev = previous.iloc[idx]
                             # Attempt a true match on email address
-                            res = df[df['Email Address'].apply(lambda x: x.lower()) == prev['Email'].lower()]
-                            # If successful, add to dictionary
-                            if len(res) == 1:
-                                output_dict[student] = (res['Last Name'].item(), res['First Name'].item(), res['Email Address'].item())
+                            res = true_match(prev, df, ['Email'])
+                            if len(res) >= 1:
+                                # If successful, add to dictionary
+                                output_dict[student] = gather_output(res)
                                 return
                             # Else, attempt a true match on Last, First
                             else:
-                                res = df[(df['Last Name'].apply(lambda x: x.lower()) == prev['Last Name'].lower()) & (df['First Name'].apply(lambda x: x.lower()) == prev['First Name'].lower())]
-                                # If successful, add to dictionary
-                                if len(res) == 1:
-                                    output_dict[student] = (res['Last Name'].item(), res['First Name'].item(), res['Email Address'].item())
-                    # If still unsuccessful, give up
-                    else:
+                                res = true_match(prev, df, ['Last Name', 'First Name'])
+                                if len(res) >= 1:
+                                    # If successful, add to dictionary
+                                    output_dict[student] = gather_output(res)
+                                    return
+                
+                # Finally, try a match using partial first name
+                # Should help with issues of middle name
+                res = true_match(row, df, ['Last Name'])
+                if len(res) >= 1:
+                    # Gather partial name match
+                    partial = partial_name_match(row['First Name'].lower().strip(), res['First Name'].apply(lambda x: x.lower().strip()).tolist())
+                    res = res[res['First Name'].apply(lambda x: x.lower().strip()) == partial]
+                    # If successful, add to dictionary
+                    if len(res) >= 1:
+                        output_dict[student] = gather_output(res)
                         return
+                
+                # If still unsuccessful, give up
+                else:
+                    return
+
+
 
 # Attempt to match students
 clinical_roster.apply(match_students, axis=1, args=(noncompliant_curr, cb_to_dpu), historic=historical_students);
@@ -194,114 +236,13 @@ clinical_roster.apply(match_students, axis=1, args=(compliant_curr, cb_to_dpu), 
 
 
 
+leftover = clinical_roster[~clinical_roster['Emplid'].isin(cb_to_dpu.keys())]
 
 
-
-
-
-
-
-
-
-
-
-
-
-                
-
-  # If using last_resort
-if last_resort:
-    # Start with a true match on first name
-    res = noncompliant_curr[noncompliant_curr['First Name'] == row['First Name']]
-    # Get a list of which emails have already been claimed
-    claimed_emails = [v[2] for k,v in cb_to_dpu.items()]
-    # Drop already claimed emails
-    res = res[~res['Email Address'].isin(claimed_emails)]              
-                
-                
-
-    
-
-def match (row):
-    # First, attempt a true match on email address
-    res = noncompliant_curr[noncompliant_curr['Email Address'] == row['Email']]
-    # If successful, return data
-    if len(res) != 0:
-        return pd.Series([res['Number of Requirements Incomplete'].item(), res['Requirements Incomplete'].item()])
-    # Else, attempt a true match on Last, First
-    else:
-        res = noncompliant_curr[(noncompliant_curr['Last Name'] == row['Last Name']) & (noncompliant_curr['First Name'] == row['First Name'])]
-        # If successful, return data
-        if len(res) != 0:
-            return pd.Series([res['Number of Requirements Incomplete'].item(), res['Requirements Incomplete'].item()])
-        # Else, start with a true match on first name
-        else:
-            res = noncompliant_curr[noncompliant_curr['First Name'] == row['First Name']]
-            
-            # If there is more than one student with first name, weed out
-            # those who were previously 
-            if 
-        
-        
-        # true match first name, not previously selected, plus fuzzy email?
-        # otherwise, failure
-
-
-
-
-
-
-
-
-
-
-# Connect each student to a Castle Branch account
-studs = clinical_roster[['Last Name', 'First Name', 'Email']]
-cbs = noncompliant_curr[['Last Name', 'First Name', 'Email Address']]
-
-def match (row):
-    # First, attempt a true match on email address
-    res = noncompliant_curr[noncompliant_curr['Email Address'] == row['Email']]
-    # If successful, return data
-    if len(res) != 0:
-        return pd.Series([res['Number of Requirements Incomplete'].item(), res['Requirements Incomplete'].item()])
-    # Else, attempt a true match on Last, First
-    else:
-        res = noncompliant_curr[(noncompliant_curr['Last Name'] == row['Last Name']) & (noncompliant_curr['First Name'] == row['First Name'])]
-        # If successful, return data
-        if len(res) != 0:
-            return pd.Series([res['Number of Requirements Incomplete'].item(), res['Requirements Incomplete'].item()])
-        # Else, start with a true match on first name
-        else:
-            res = noncompliant_curr[noncompliant_curr['First Name'] == row['First Name']]
-            
-            # If there is more than one student with first name, weed out
-            # those who were previously 
-            if 
-        
-        
-        # true match first name, not previously selected, plus fuzzy email?
-        # otherwise, failure
-        
-
-
-
-
-
-
-
-
-
-
-
-student_trackers = [x for x in compliant_curr['To-Do List Name'].unique() if 'DE69' in x and 'Disclosure & Authorization' not in x]
-faculty_trackers = [x for x in compliant_curr['To-Do List Name'].unique() if 'DE69' in x and 'Disclosure & Authorization' not in x]
 
 
 all_trackers = np.concatenate((compliant_curr['To-Do List Name'].unique(), noncompliant_curr['To-Do List Name'].unique()))
 all_trackers = np.unique(all_trackers)
-
-
 
 dna_trackers = []
 student_trackers = []
@@ -314,272 +255,125 @@ for tracker in all_trackers:
     elif 'DE69' in tracker:
         student_trackers.append(tracker)
 
-student_trackers = [x for x in all_trackers if 'DE34' not in x]
 
 
 
 
 
-
-
-
-
-t = compliant_curr[compliant_curr['To-Do List Name'].isin(student_trackers)]
-u = noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(student_trackers)]
-
-
-q = pd.concat([t, u])
-q[q.duplicated(subset=['Email Address'], keep=False)]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Sort by To-Do List and then by Order Submission Date
-q.sort_values(by=['To-Do List Status', 'Order Submission Date'], ascending=False, inplace=True)
-# In case of duplicates, first we would drop "compliant"
-# Second we would drop the least recent order
-q.drop_duplicates(subset=['Email Address'], keep='first', inplace=True)
-
-
-
-test = pd.merge(students, q, how='left', left_on='Email', right_on='Email Address')
-
-
-# do a merge on email address
-
-test = pd.merge(students, t, how='left', left_on='Email', right_on='Email Address')
-
-test = pd.merge(test, u, how='left', left_on='Email', right_on='Email Address')
-
-
-test[test.duplicated(subset=['Emplid'], keep=False)]
-
-
-
-# try merging by email
-# then try matching by email with just D & A
-# if still none, try matching with fuzzywuzzy
-
-e = 'leanderson8@outlook.com'
-e = 'christinebalderas91@gmail.com'
-
-matches = q[q['Email Address'] == e]
-
-
-students[students['Email'] == e]['Emplid'].item()
-
-def match_student (row):
+def determine_status (row, id_dict, noncompliant_df, compliant_df, noncompliant_changelog, compliant_changelog):
     '''docstring'''
-    # First, try a true match of email address
-    try:
-        Emplid = students[students['Email'] == row['Email Address']]['Emplid'].item()
-    except:
-        # Second, try a true match of first and last name
-        try:
-            Emplid = students[(students['Last Name'].lower() == row['Last Name'].lower()) & (students['First Name'].lower() == row['First Name'].lower())]['Emplid'].item()
-        except:
-            Emplid = None
-    return Emplid
     
+    key = id_dict.get(row['Emplid'], None)
     
-
+    if not key:
+        # If unable to identify student
+        return pd.Series([None, 'No', ['Could Not Identify Student'], None, None])
     
-
-
+    # Store connection key
+    conn = pd.Series(data={'Last Name':key[0], 'First Name':key[1], 'Email':key[2]})
+    
+    # Check for compliance
+    compliant = true_match(conn, compliant_df[compliant_df['To-Do List Name'].isin(student_trackers)], ['Email'])
+    if len(compliant) == 1:
+        # Check if this is an update from last time
+        changed = (compliant.values == compliant_changelog.values).all(1).any()
+        # Return required fields
+        return pd.Series([changed, 'Yes', None, compliant['Name of Next Requirement Due'].item(), compliant['Next Action Date'].item()])
         
-q = pd.concat([t, u])
-q = q[['First Name', 'Last Name', 'Email Address']]
-q.drop_duplicates(subset=['Email Address'], inplace=True)
-q['Emplid'] = q.apply(match_student, axis=1)
-
-
-
-
-
-cln_ids = clinical_roster['Student ID'].unique()
-
-
-def check_clinical (row):
-    if row['Emplid'] in cln_ids:
-        return True
-    else:
-        return False
+    # Check for noncompliance
+    noncompliant = true_match(conn, noncompliant_df[noncompliant_df['To-Do List Name'].isin(student_trackers)], ['Email'])
+    if len(noncompliant) >= 1:
+        # If more than one result, simply take the first
+        noncompliant = noncompliant.iloc[0]
+        # Check if this is an update from last time
+        changed = (noncompliant.values == noncompliant_changelog.values).all(1).any()
+        # Return required fields
+        return pd.Series([changed, 'No', noncompliant['Requirements Incomplete'], None, None])
     
-    try:
-        #site = clinical_roster[clinical_roster['Student ID'] == row['Emplid']]['Clinical Site'].item()
-        site = clinical_roster.loc[clinical_roster['Student ID'] == row['Emplid'], 'Clinical Site'].values
-        return site
-    except:
-        pass
-
-
-test = students.copy(deep=True)
-test['cln'] = test.apply(check_clinical, axis=1)
-
-test2 = test[test['cln'] == True]
-
-
-
-
-all_student_trackers = [x for x in all_trackers if 'DE34' not in x]
-
-t = compliant_curr[compliant_curr['To-Do List Name'].isin(all_student_trackers)]
-u = noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(all_student_trackers)]
-
-q = pd.concat([t, u])
-q['Emplid'] = q.apply(match_student, axis=1)
-
-
-def check_compliance (row):
-    if row['Emplid'] in q['Emplid']:
-        result = q[(q['Emplid'] == row['Emplid']) & (q['To-Do List Name'].isin(student_trackers)) & (~q['To-Do List Status'].isin(['Compliant', 'Complete']))]
-        if not result.empty:
-            status = 'Noncompliant'
-            num_reqs_due = result['Number of Requirements Incomplete']
-            reqs_due = result['Requirements Incomplete']
-        else:
-            result = q[(q['Emplid'] == row['Emplid']) & (q['To-Do List Name'].isin(student_trackers)) & (q['To-Do List Status'].isin(['Compliant', 'Complete']))]
-        if not result.empty:
-            status = 'Compliant'
-            num_reqs_due = 0
-            reqs_due = 'N/A'
-        else:
-            result = q[(q['Emplid'] == row['Emplid']) & (q['To-Do List Name'].isin(dna_trackers))]
-        if not result.empty:
-            status = 'Noncompliant'
-            num_reqs_due = 1
-            reqs_due = 'Never set up health requirement tracker'
-    else:
-        status = 'Unknown'
-        num_reqs_due = 1
-        reqs_due = 'Locate tracker'
-        
-    return pd.Series({'Status': status, 'Num Reqs Due': num_reqs_due, 'Reqs Due': reqs_due})
-        
+    # Check for students who have only completed D&A
+    dna = true_match(conn, compliant_df[compliant_df['To-Do List Name'].isin(dna_trackers)], ['Email'])
+    if len(dna) == 1:
+        # Check if this is an update from last time
+        changed = (dna.values == compliant_changelog.values).all(1).any()
+        # Return required fields
+        return pd.Series([changed, 'No', 'Student has met D&A but not registered for health req tracker', None, None])
     
-test2[['Status', 'Num Reqs Due', 'Reqs Due']] = test2.apply(check_compliance, axis=1)
-
-
-
-
-
-
-
-
-stuff = clinical_roster[clinical_roster['Student ID'] == '0695385']['Clinical Site']
-stuff = clinical_roster[clinical_roster['Student ID'] == '1824625']['Clinical Site']
-
-
-
-'''
-start with student list
-
-ask if student is in clinical 
-    gather this data
-    
-if not in clinical, ignore?
-
-if in clinical:
-    check if non-compliant
-    
-    if not, check if compliant
-    
-    if not, check if D & A
-    
-    if not, raise flag?
-
-
-'''
-
-
-
-
-
-    
+    # Check for students who have no account
+    dna = true_match(conn, noncompliant_df[noncompliant_df['To-Do List Name'].isin(dna_trackers)], ['Email'])
+    if len(dna) == 1:
+        # Check if this is an update from last time
+        changed = (dna.values == noncompliant_changelog.values).all(1).any()
+        # Return required fields
+        return pd.Series([changed, 'No', 'Student has not registered for an account', None, None])
     
 
+fields = ['Changed Since ' + files['noncompliant_prev'].rstrip('.csv')[-10:], 'Compliant', 'Requirements Incomplete', 'Next Due', 'Next Due Date']
 
+clinical_roster[fields] = clinical_roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog))
 
+# Revise order of columns
+cols = clinical_roster.columns.tolist()
+new_order = cols[:6] + cols[27:] + cols[6:14] + cols[21:24] + cols[14:21] + cols[24:27]
+clinical_roster = clinical_roster[new_order]
 
+# Output data
+f_name = 'health_req_' + datetime.today().strftime('%Y-%m-%d') + '.xlsx'
+f_name = os.path.join('W:\\csh\\Nursing\\Clinical Placements\\Castle Branch and Health Requirements\\Reporting', f_name)
+writer = pd.ExcelWriter(f_name, engine='xlsxwriter')
+clinical_roster.to_excel(writer, index=False, sheet_name='report')
+# Access the worksheet
+workbook = writer.book
+worksheet = writer.sheets['report']
+# Set zoom
+worksheet.set_zoom(90)
+# Set column sizes
+worksheet.set_column('A:A', 10)
+worksheet.set_column('B:C', 15)
+worksheet.set_column('D:D', 10)
+worksheet.set_column('E:E', 30)
+worksheet.set_column('F:F', 15)
+worksheet.set_column('G:G', 30)
+worksheet.set_column('H:H', 15)
+worksheet.set_column('I:J', 30)
+worksheet.set_column('K:K', 15)
+worksheet.set_column('L:M', 5)
+worksheet.set_column('O:O', 30)
+worksheet.set_column('P:P', 10)
+worksheet.set_column('Q:Q', 15)
+worksheet.set_column('R:R', 20)
+worksheet.set_column('S:S', 25)
+worksheet.set_column('T:U', 5)
+worksheet.set_column('V:X', 30)
+worksheet.set_column('Y:Y', 30)
+worksheet.set_column('Z:Z', 10)
+worksheet.set_column('AA:AA', 15)
+worksheet.set_column('AB:AB', 20)
+worksheet.set_column('AC:AC', 25)
+worksheet.set_column('AD:AF', 30)
 
+# Conditional formatting
+# Add a format. Light red fill with dark red text.
+format1 = workbook.add_format({'bg_color': '#FFC7CE',
+                               'font_color': '#9C0006'})
+# Add a format. Green fill with dark green text.
+format2 = workbook.add_format({'bg_color': '#C6EFCE',
+                               'font_color': '#006100'})
 
+# Define our range for the color formatting
+number_rows = len(clinical_roster.index)
+compliant_range = "H2:H{}".format(number_rows+1)
+changes_range = "G2:G{}".format(number_rows+1)
 
+# Highlight Noncompliant in Red
+worksheet.conditional_format(compliant_range, {'type': 'cell',
+                                               'criteria': 'equal to',
+                                               'value': '"No"',
+                                               'format': format1})
+# Highlight changes in Green
+worksheet.conditional_format(changes_range, {'type': 'cell',
+                                               'criteria': 'equal to',
+                                               'value': 'TRUE',
+                                               'format': format2})
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
-
-
-# Clean data
-    # Drop classifications that don't matter
-        # careful - DNP students could be stuck as alumni or inactive?
-    # Separate into student/faculty based on account name
-    # Attempt to connect to real people
-        # start with student list and attempt to perfect match emails
-        # for those who don't attempt match first and last name
-        # for those who don't do fuzzy match on name and keep if > threshold
-        # finally, consider failure
-        # same with faculty, but start with secondary email, then try primary
-        
-# Add data
-    # for students, add their clinical course and location for curr and prev
-        # program, start date, advisor
-        # maybe add instructor info?
-    # faculty, add teaching load current and prev
-    # add phone numbers
-    
-# Consider graphing?
-    # number of 
-
-# to highlight new data, grab the most recent report as well and do a full
-    # removal of full duplicates. should be left with only the new stuff
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+writer.save()
 
