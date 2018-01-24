@@ -168,6 +168,22 @@ def determine_status (row, id_dict, noncompliant_df, compliant_df, noncompliant_
         # Return required fields
         return pd.Series([changed, 'No', 'Student has not registered for an account', None, None])
 
+def archive_old_reports (report_path, report_basename, archive_folder):
+    '''Function to move all old reports into an archive folder.'''
+    # Gather all files that match basename within the path
+    all_files = dpu.get_latest(report_path, report_basename, num_files=float('inf'))
+    # Test if destination exists; if not, make folder
+    destination = os.path.join(report_path, archive_folder)
+    if not os.path.isdir(destination):
+        os.makedirs(destination)
+    # Iterate through all old reports
+    for old_path in all_files:
+        # Create new path name
+        file_name = os.path.basename(old_path)
+        new_path = os.path.join(destination, file_name)
+        # Rename (i.e., move) old reports
+        os.rename(old_path, new_path)
+
 def output_report (df, date_of_report):
     '''Function that primarily applies formatting to excel report.'''
     # File name
@@ -254,20 +270,6 @@ def output_report (df, date_of_report):
     worksheet.autofilter('A1:AF{}'.format(number_rows+1))
     # Apply changes
     writer.save()
-
-
-
-
-'''
-Get next due for all, not just compliant
-Approaching Next Action Date
-Time Frame Next 120 Days
-
-Add an external file to manually map students that can't be identified
-
-'''
-
-
 
 def main ():
     '''Main function call.'''
@@ -401,10 +403,42 @@ def main ():
     new_order = cols[:6] + cols[27:] + cols[6:14] + cols[21:24] + cols[14:21] + cols[24:27]
     clinical_roster = clinical_roster[new_order]
     
+    # Archive old reports
+    archive_old_reports('W:\\csh\\Nursing\\Clinical Placements\\Castle Branch and Health Requirements\\Reporting', 'student_report', 'Archived Student Reports')
+    
     # Output to file
-    date_of_current = files['noncompliant_prev'].rstrip('.csv')[-10:]
+    date_of_current = files['noncompliant_curr'].rstrip('.csv')[-10:]
     date_of_current = datetime.strptime(date_of_current, '%Y-%m-%d')
     output_report(clinical_roster, date_of_current)
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+'''
+Get next due for all, not just compliant
+Approaching Next Action Date
+Time Frame Next 120 Days
+
+Add an external file to manually map students that can't be identified
+
+option to request to use a particular previous date for changelog
+
+'''
+
+
