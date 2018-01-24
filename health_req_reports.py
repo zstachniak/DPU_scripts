@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from fuzzywuzzy import fuzz, process
 import dpu.scripts as dpu
 from dpu.file_locator import FileLocator
+import click
 
 def read_cb (file):
     '''Function to load Castle Branch report'''
@@ -281,14 +282,45 @@ def output_report (df, date_of_report, output_path):
     # Apply changes
     writer.save()
 
-def main ():
+@click.command()
+@click.option(
+        '--prev_date',
+        help='The date you want to use for previous report (basically, this is what the changelog will be built from. Should be in %Y-%m-d format (e.g. 2018-01-24).',
+)
+def main (prev_date):
     '''Main function call.'''
     # Call to FileLocator class
     FL = FileLocator()
+    
+    # Check if a prev_date was supplied
+    if prev_date:
+        # Test for proper date formatting
+        try:
+            datetime.strptime(prev_date, '%Y-%m-%d')
+        except ValueError:
+            print('Date provided was not in a valid format. Please retry using %Y-%m-d format (e.g. 2018-01-24).')
+        
+        # Gather absolute paths to previous
+        nc_prev = os.path.abspath(os.path.join(os.sep, FL.health_req_report, 'Downloaded Reports', 'Noncompliant ' + prev_date + '.csv'))
+        cc_prev = os.path.abspath(os.path.join(os.sep, FL.health_req_report, 'Downloaded Reports', 'Compliant ' + prev_date + '.csv'))
+        # Make sure both files exist
+        if os.path.exists(nc_prev) and os.path.exists(cc_prev):
+            num_files = 1
+        else:
+            raise ValueError('Date provided is in a valid format, but compliance files do not exist using that date.')
+    else:
+        num_files = 2
 
     # Get the latest reports
-    noncompliant_files = dpu.get_latest(os.path.join(FL.health_req_report, 'Downloaded Reports'), 'Noncompliant', num_files=2)
-    compliant_files = dpu.get_latest(os.path.join(FL.health_req_report, 'Downloaded Reports'), 'Compliant', num_files=2)
+    noncompliant_files = dpu.get_latest(os.path.join(FL.health_req_report, 'Downloaded Reports'), 'Noncompliant', num_files=num_files)
+    compliant_files = dpu.get_latest(os.path.join(FL.health_req_report, 'Downloaded Reports'), 'Compliant', num_files=num_files)
+    
+    if prev_date:
+        # Add previous files
+        noncompliant_files = [noncompliant_files, nc_prev]
+        compliant_files = [compliant_files, cc_prev]
+        if noncompliant_files[0] == noncompliant_files[1] or compliant_files[0] == compliant_files[1]:
+            raise 'Previous date provided is same as date of most recent compliance files. Download more recent reports and try again.'
     
     # Get the two most recent reports
     noncompliant_curr = read_cb(noncompliant_files[0])
@@ -416,9 +448,6 @@ Approaching Next Action Date
 Time Frame Next 120 Days
 
 Add an external file to manually map students that can't be identified
-
-option to request to use a particular previous date for changelog
-
 '''
 
 
