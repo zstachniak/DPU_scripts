@@ -172,6 +172,12 @@ def archive_old_reports (report_path, report_basename, archive_folder):
     '''Function to move all old reports into an archive folder.'''
     # Gather all files that match basename within the path
     all_files = dpu.get_latest(report_path, report_basename, num_files=float('inf'))
+    # If no old reports are found, exit function
+    if not all_files:
+        return
+    # If a single file, coerce to list
+    if type(all_files) == str:
+        all_files = [all_files]
     # Test if destination exists; if not, make folder
     destination = os.path.join(report_path, archive_folder)
     if not os.path.isdir(destination):
@@ -181,6 +187,9 @@ def archive_old_reports (report_path, report_basename, archive_folder):
         # Create new path name
         file_name = os.path.basename(old_path)
         new_path = os.path.join(destination, file_name)
+        # If new path already exists, delete it
+        if os.path.exists(new_path):
+            os.remove(new_path)
         # Rename (i.e., move) old reports
         os.rename(old_path, new_path)
 
@@ -320,7 +329,7 @@ def main ():
     clinical_roster.drop(labels=clinical_roster.columns[8:11], axis=1, inplace=True)
     # Gather list of duplicates (i.e., student has more than one clinical course)
     dupe_truth_value = clinical_roster.duplicated(subset=['Student ID'], keep='first')
-    dupes = clinical_roster.loc[dupe_truth_value]
+    dupes = clinical_roster.loc[dupe_truth_value].copy(deep=True)
     dupes.drop(labels=['Term'], axis=1, inplace=True)
     # Drop duplicates from original list
     clinical_roster.drop_duplicates(subset=['Student ID'], keep='first', inplace=True)
@@ -414,19 +423,6 @@ def main ():
 if __name__ == "__main__":
     main()
 
-
-
-
-
-
-
-
-
-
-
-
-
-    
 
 
 
