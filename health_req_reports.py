@@ -125,7 +125,7 @@ def match_students (row, df, output_dict, **kwargs):
                 else:
                     return
 
-def determine_status (row, id_dict, noncompliant_df, compliant_df, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers):
+def determine_status (row, id_dict, noncompliant_df, compliant_df, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date):
     '''Gather CB compliance stats'''
     # Get ID
     key = id_dict.get(row['Emplid'], None)
@@ -151,8 +151,16 @@ def determine_status (row, id_dict, noncompliant_df, compliant_df, noncompliant_
         noncompliant = noncompliant.iloc[0]
         # Check if this is an update from last time
         changed = (noncompliant.values == noncompliant_changelog.values).all(1).any()
+        # Check 
+        next_due = true_match(conn, next_action_date, ['Email'])
+        if len(next_due) == 1:
+            next_due_req = next_due['Requirement Name'].item()
+            next_due_date = datetime.strptime(next_due['Requirement Due Date'].item(), '%m/%d/%Y')
+        else:
+            next_due_req = None
+            next_due_date = None
         # Return required fields
-        return pd.Series([changed, 'No', noncompliant['Requirements Incomplete'], None, None])
+        return pd.Series([changed, 'No', noncompliant['Requirements Incomplete'], next_due_req, next_due_date])
     
     # Check for students who have only completed D&A
     dna = true_match(conn, compliant_df[compliant_df['To-Do List Name'].isin(dna_trackers)], ['Email'])
@@ -330,6 +338,16 @@ def main (prev_date):
     # Get change logs
     noncompliant_changelog = pd.merge(noncompliant_curr, noncompliant_prev, on=noncompliant_curr.columns.tolist(), how='outer', indicator=True).query("_merge != 'both'").drop('_merge', 1)
     compliant_changelog = pd.merge(compliant_curr, compliant_prev, on=compliant_curr.columns.tolist(), how='outer', indicator=True).query("_merge != 'both'").drop('_merge', 1)
+    # Get next action date file
+    nad_file = dpu.get_latest(os.path.join(FL.health_req_report, 'Downloaded Reports'), 'Next_Action_Date', num_files=1)
+    to_datetime = lambda d: datetime.strptime(d, '%m/%d/%Y')
+    to_string = lambda d: datetime.strftime(d, '%m/%d/%Y')
+    next_action_date = pd.read_csv(nad_file, header=0, converters={'Order Submission Date': to_datetime, 'Requirement Due Date': to_datetime})
+    next_action_date.rename(columns={'Email Address':'Email'}, inplace=True)
+    # Drop all but earliest next requirement
+    next_action_date.sort_values(by='Requirement Due Date').drop_duplicates(subset='Email', keep='first', inplace=True)
+    # Put back as string
+    next_action_date['Requirement Due Date'] = next_action_date['Requirement Due Date'].apply(lambda x: to_string(x))
     
     # Get the latest student list
     students = pd.read_excel(dpu.get_latest(FL.students, 'Student List'), header=0, converters={'Emplid':str, 'Admit Term':str, 'Latest Term Enrl': str, 'Run Term': str,})
@@ -396,15 +414,6 @@ def main (prev_date):
     # Reset index
     historical_students.reset_index(drop=True, inplace=True)
     
-    '''Here we attempt to connect all students in the clinical roster with
-    an account in Castle Branch. To do so, we make a dictionary lookup.
-    # dict[Emplid] = (Last Name, First Name, Email)
-    '''
-    cb_to_dpu = {}
-    # Attempt to match students
-    clinical_roster.apply(match_students, axis=1, args=(noncompliant_curr, cb_to_dpu), historic=historical_students);
-    clinical_roster.apply(match_students, axis=1, args=(compliant_curr, cb_to_dpu), historic=historical_students);
-    
     # Collection of tracker names
     all_trackers = np.concatenate((compliant_curr['To-Do List Name'].unique(), noncompliant_curr['To-Do List Name'].unique()))
     all_trackers = np.unique(all_trackers)
@@ -419,11 +428,23 @@ def main (prev_date):
             faculty_trackers.append(tracker)
         elif 'DE69' in tracker:
             student_trackers.append(tracker)
+        
+    '''Here we attempt to connect all students in the clinical roster with
+    an account in Castle Branch. To do so, we make a dictionary lookup.
+    # dict[Emplid] = (Last Name, First Name, Email)
+    '''
+    cb_to_dpu = {}
+    # Attempt to match students, starting with full accounts
+    # Sometimes the dna account is all we get, even though they have full
+    clinical_roster.apply(match_students, axis=1, args=(noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(student_trackers)], cb_to_dpu), historic=historical_students);
+    clinical_roster.apply(match_students, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(student_trackers)], cb_to_dpu), historic=historical_students);
+    clinical_roster.apply(match_students, axis=1, args=(noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(dna_trackers)], cb_to_dpu));
+    clinical_roster.apply(match_students, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(dna_trackers)], cb_to_dpu));
     
     # New column names
     fields = ['Changed Since ' + noncompliant_files[1].rstrip('.csv')[-10:], 'Compliant', 'Requirements Incomplete', 'Next Due', 'Next Due Date']
     # Gather compliance status
-    clinical_roster[fields] = clinical_roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers))
+    clinical_roster[fields] = clinical_roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date))
     
     # Revise order of columns
     cols = clinical_roster.columns.tolist()
