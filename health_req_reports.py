@@ -461,14 +461,3 @@ def main (prev_date):
 
 if __name__ == "__main__":
     main()
-
-
-'''
-Get next due for all, not just compliant
-Approaching Next Action Date
-Time Frame Next 120 Days
-
-Add an external file to manually map students that can't be identified
-'''
-
-
