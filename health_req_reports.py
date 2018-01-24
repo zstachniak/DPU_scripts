@@ -11,6 +11,7 @@ import os
 from datetime import datetime, timedelta
 from fuzzywuzzy import fuzz, process
 import dpu.scripts as dpu
+from dpu.file_locator import FileLocator
 
 def read_cb (file):
     '''Function to load Castle Branch report'''
@@ -193,11 +194,11 @@ def archive_old_reports (report_path, report_basename, archive_folder):
         # Rename (i.e., move) old reports
         os.rename(old_path, new_path)
 
-def output_report (df, date_of_report):
+def output_report (df, date_of_report, output_path):
     '''Function that primarily applies formatting to excel report.'''
     # File name
     f_name = 'student_report_' + date_of_report.strftime('%Y-%m-%d') + '.xlsx'
-    f_name = os.path.join('W:\\csh\\Nursing\\Clinical Placements\\Castle Branch and Health Requirements\\Reporting', f_name)
+    f_name = os.path.join(output_path, f_name)
     # Initialize a writer
     writer = pd.ExcelWriter(f_name, engine='xlsxwriter')
     # Write data
@@ -282,40 +283,27 @@ def output_report (df, date_of_report):
 
 def main ():
     '''Main function call.'''
-    
-    folders = {'reports': 'W:\\csh\\Nursing\\Clinical Placements\\Castle Branch and Health Requirements\\Reporting\\Downloaded Reports',
-           'students': 'W:\\csh\\Nursing\\Student Records',
-           'schedule': 'W:\\csh\\Nursing\\Schedules',
-           'clinical': 'W:\\csh\\Nursing Administration\\Clinical Placement Files',
-           }
+    # Call to FileLocator class
+    FL = FileLocator()
 
     # Get the latest reports
-    noncompliant_files = dpu.get_latest(folders['reports'], 'Noncompliant', num_files=2)
-    compliant_files = dpu.get_latest(folders['reports'], 'Compliant', num_files=2)
-    
-    files = {'students': dpu.get_latest(folders['students'], 'Student List'),
-             'faculty': 'W:\\csh\\Nursing\\Faculty\\Employee List.xlsx',
-             'terms': 'W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx',
-             'noncompliant_curr': noncompliant_files[0],
-             'noncompliant_prev': noncompliant_files[1],
-             'compliant_curr': compliant_files[0],
-             'compliant_prev': compliant_files[1],
-             }
+    noncompliant_files = dpu.get_latest(os.path.join(FL.health_req_report, 'Downloaded Reports'), 'Noncompliant', num_files=2)
+    compliant_files = dpu.get_latest(os.path.join(FL.health_req_report, 'Downloaded Reports'), 'Compliant', num_files=2)
     
     # Get the two most recent reports
-    noncompliant_curr = read_cb(files['noncompliant_curr'])
-    noncompliant_prev = read_cb(files['noncompliant_prev'])
-    compliant_curr = read_cb(files['compliant_curr'])
-    compliant_prev = read_cb(files['compliant_prev'])
+    noncompliant_curr = read_cb(noncompliant_files[0])
+    noncompliant_prev = read_cb(noncompliant_files[1])
+    compliant_curr = read_cb(compliant_files[0])
+    compliant_prev = read_cb(compliant_files[1])
     # Get change logs
     noncompliant_changelog = pd.merge(noncompliant_curr, noncompliant_prev, on=noncompliant_curr.columns.tolist(), how='outer', indicator=True).query("_merge != 'both'").drop('_merge', 1)
     compliant_changelog = pd.merge(compliant_curr, compliant_prev, on=compliant_curr.columns.tolist(), how='outer', indicator=True).query("_merge != 'both'").drop('_merge', 1)
     
     # Get the latest student list
-    students = pd.read_excel(files['students'], header=0, converters={'Emplid':str, 'Admit Term':str, 'Latest Term Enrl': str, 'Run Term': str,})
+    students = pd.read_excel(dpu.get_latest(FL.students, 'Student List'), header=0, converters={'Emplid':str, 'Admit Term':str, 'Latest Term Enrl': str, 'Run Term': str,})
     students.drop_duplicates(subset='Emplid', inplace=True)
     # Get the faculty list
-    faculty = pd.read_excel(files['faculty'], header=0, converters={'Empl ID': str,})
+    faculty = pd.read_excel(os.path.join(FL.faculty, 'Employee List.xlsx'), header=0, converters={'Empl ID': str,})
     # Get term descriptions
     TermDescriptions = dpu.get_term_descriptions()
     # Get current term
@@ -354,11 +342,9 @@ def main ():
         new_cols = [inst + ' ' + x for x in req_list]
         # Get contact info        
         clinical_roster[new_cols] = clinical_roster.apply(instructor_contact_info, axis=1, args=(inst, faculty, all_faculty_names))
-        
-    # Historical Student File location
-    hist_students = 'W:\\csh\\Nursing\\Student Records\\Historical Student Lists'
+    
     # Get a good handful of most recent files
-    stud_files = dpu.get_latest(hist_students, 'Student List', num_files=16)
+    stud_files = dpu.get_latest(FL.hist_students, 'Student List', num_files=16)
     # Iterate through files and concatenate all together
     for i, file in enumerate(stud_files):
         if i == 0:
@@ -403,7 +389,7 @@ def main ():
             student_trackers.append(tracker)
     
     # New column names
-    fields = ['Changed Since ' + files['noncompliant_prev'].rstrip('.csv')[-10:], 'Compliant', 'Requirements Incomplete', 'Next Due', 'Next Due Date']
+    fields = ['Changed Since ' + noncompliant_files[1].rstrip('.csv')[-10:], 'Compliant', 'Requirements Incomplete', 'Next Due', 'Next Due Date']
     # Gather compliance status
     clinical_roster[fields] = clinical_roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers))
     
@@ -413,17 +399,15 @@ def main ():
     clinical_roster = clinical_roster[new_order]
     
     # Archive old reports
-    archive_old_reports('W:\\csh\\Nursing\\Clinical Placements\\Castle Branch and Health Requirements\\Reporting', 'student_report', 'Archived Student Reports')
+    archive_old_reports(FL.health_req_report, 'student_report', 'Archived Student Reports')
     
     # Output to file
-    date_of_current = files['noncompliant_curr'].rstrip('.csv')[-10:]
+    date_of_current = noncompliant_files[0].rstrip('.csv')[-10:]
     date_of_current = datetime.strptime(date_of_current, '%Y-%m-%d')
-    output_report(clinical_roster, date_of_current)
+    output_report(clinical_roster, date_of_current, FL.health_req_report)
 
 if __name__ == "__main__":
     main()
-
-
 
 
 '''
