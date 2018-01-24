@@ -1,1 +1,2 @@
-file_locator/*
+dpu/file_locator.py
+dpu/__pychache__/*
