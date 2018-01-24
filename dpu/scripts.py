@@ -9,7 +9,8 @@ import os
 import pandas as pd
 from datetime import datetime
 from fuzzywuzzy import fuzz, process
-
+from dpu.file_locator import FileLocator
+FL = FileLocator()
 #############################################################
 # Functions
 #############################################################
@@ -94,7 +95,7 @@ def get_latest (pathname, filename, **kwargs):
 
 def get_term_descriptions ():
     '''A function that returns a Pandas dataframe of all terms.'''
-    TermDescriptions = pd.read_excel('W:/csh/Nursing/Schedules/Term Descriptions.xlsx', header=0, converters={'Term':str})
+    TermDescriptions = pd.read_excel(os.path.join(FL.schedule, 'Term Descriptions.xlsx'), header=0, converters={'Term':str})
     return TermDescriptions
 
 def guess_current_term (TermDescriptions):
@@ -131,7 +132,7 @@ def guess_current_term (TermDescriptions):
 def get_cln (term, TermDescriptions):
     '''A function to gather clinical rosters from path & term.'''
     # Starting Path
-    starting_path = 'W:\\csh\\Nursing Administration\\Clinical Placement Files'
+    starting_path = FL.cln_roster
     # Gather academic year and quarter
     ay = TermDescriptions[TermDescriptions['Term'] == term]['Academic Year'].item()
     q = TermDescriptions[TermDescriptions['Term'] == term]['Quarter'].item()
@@ -145,7 +146,7 @@ def get_cln (term, TermDescriptions):
 def get_dir_of_schedule (term, TermDescriptions):
     '''A function to output a full directory path to a schedule.'''
     # Define schedule starting path
-    starting_path = 'W:\\csh\\Nursing\\Schedules'
+    starting_path = FL.schedule
     # Gather quarter
     q = TermDescriptions[TermDescriptions['Term'] == term]['Quarter'].item()
     # If Summer, increment term to account for fiscal year changeover
@@ -160,7 +161,7 @@ def get_dir_of_schedule (term, TermDescriptions):
 def get_schedule (term, TermDescriptions):
     '''A function to gather a quarterly schedule from path & term.'''
     # Define schedule starting path
-    starting_path = 'W:\\csh\\Nursing\\Schedules'
+    starting_path = FL.schedule
     # Gather quarter
     q = TermDescriptions[TermDescriptions['Term'] == term]['Quarter'].item()
     # If Summer, increment term to account for fiscal year changeover
