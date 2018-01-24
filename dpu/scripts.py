@@ -25,21 +25,29 @@ def get_latest (pathname, filename, **kwargs):
     date_format: indicate a date format for files (default: '%Y-%m-%d')
     num_files: number of files to return (if more than one, in ordered list)
     ignore_suffix: an additional file suffix to ignore
+    verbose: if True, will print statements about progress (default: False)
     '''
     # Gather optional keyword arguments
     date_format = kwargs.pop('date_format', '%Y-%m-%d')
     num_files= kwargs.pop('num_files', 1)
-    ignore_suffix = kwargs.pop('ignore_suffix', None)    
+    ignore_suffix = kwargs.pop('ignore_suffix', None)
+    verbose = kwargs.pop('verbose', False)
     #Set up storage dict
     file_dict = {}
+    if verbose:
+        print('Checking {}...'.format(pathname))
     # Iterate through objects in directory
     for name in os.listdir(pathname):
         # Concatenate the path with the object name
         subname = os.path.join(pathname, name)
+        # Split into name and extension
+        f_name, ext = os.path.splitext(subname)
+        # Gather basename
+        basename = os.path.basename(subname)
+        if verbose:
+            print('{}...'.format(basename), end='')
         #Checks for standard naming conventions and ignores file fragments
-        if os.path.isfile(subname) and filename in subname and '~$' not in subname:
-            # Split into name and extension
-            f_name, ext = os.path.splitext(subname)
+        if os.path.isfile(subname) and filename in basename and '~$' not in subname:
             if ignore_suffix:
                 # Ignore files that end in user-identified suffix
                 if f_name.endswith(ignore_suffix):
@@ -53,15 +61,25 @@ def get_latest (pathname, filename, **kwargs):
                 try:
                     date_time = datetime.strptime(date_suffix, date_format).date()
                     file_dict[date_time] = subname
+                    if verbose:
+                        print('type match.')
                 except:
-                    print('{} does not meet expected date convention and has been skipped.'.format(f_name))         
+                    if verbose:
+                        print('does not meet expected date convention and has been skipped.')
+        else:
+            if verbose:
+                print('does not meet file requirements')
     # If no files found, exit function
     if len(file_dict) == 0:
-        return 'No files were found'
+        if verbose:
+            print('No files were found')
+        return
     # Gather the most recent date in dictionary keys
     latest = max(list(file_dict.keys()))
     # If only one file is requested OR there is only one file found, return
     if num_files == 1 or len(file_dict) == 1:
+        if verbose:
+            print('Success! One file found!')
         return file_dict[latest]
     else:
         file_list = [file_dict.pop(latest)]
@@ -70,6 +88,8 @@ def get_latest (pathname, filename, **kwargs):
             latest = max(list(file_dict.keys()))
             # Pop the latest file (i.e., remove from dictionary)
             file_list.append(file_dict.pop(latest))
+        if verbose:
+            print('Success! Multiple files found!')
         return file_list
 
 def get_term_descriptions ():
