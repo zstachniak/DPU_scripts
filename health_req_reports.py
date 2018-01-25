@@ -14,6 +14,88 @@ import dpu.scripts as dpu
 from dpu.file_locator import FileLocator
 import click
 
+'''
+Need to add Program of Study
+Filter out obvious non-necessary course types, numbers
+use excel schedule as backup for unhired faculty
+Field for: [Currently in Clinical] & [Registered for CLN next Quarter]
+
+
+'''
+def separate_cln_dupes (df):
+    '''Separates out clinicals when one student has two courses.'''
+    # Sort by course number
+    df.sort_values(by='Cr', inplace=True)
+    # Gather list of duplicates (i.e., student has more than one clinical)
+    dupe_truth_value = df.duplicated(subset=['Student ID'], keep='first')
+    dupes = df.loc[dupe_truth_value].copy(deep=True)
+    dupes.drop(labels=['Term'], axis=1, inplace=True)
+    # Drop duplicates from original list
+    df.drop_duplicates(subset=['Student ID'], keep='first', inplace=True)
+    # Merge two lists 
+    df = pd.merge(df, dupes, how='left', on='Student ID', suffixes=['_1', '_2'])
+    return df
+
+def clean_student_roster (current_term):
+    '''Simple function to load and clean the student roster.'''
+    # Download student rosters
+    roster = dpu.get_student_roster()
+    # Clinical course types
+    cln_types = ['CLN', 'PRA']
+    # Range of Anesthesia courses that we simply don't care about
+    ignore_courses = [str(x) for x in range(500, 517)] + [str(x) for x in range(600, 617)]
+    # Filter rosters
+    roster = roster[((roster['Type'].isin(cln_types)) | ((roster['Cr'] == '301') & (roster['Type'] == 'LAB'))) & (~roster['Cr'].isin(ignore_courses)) & (roster['Role'] != 'SI')].copy(deep=True)
+    # Drop unneeded fields
+    roster.drop(labels=['Class Nbr', 'Role', 'Mode', 'Type', 'Subject', 'Student Name', 'Student Major'], axis=1, inplace=True)
+    # Drop any true duplicates
+    roster.drop_duplicates(inplace=True)
+    # Sort by faculty and drop duplicates (excluding faculty)
+    # Takes care of 301 issue (due to changing course times)
+    roster = roster.sort_values(by='Faculty_ID').drop_duplicates(subset=['Term', 'Student ID', 'Cr', 'Sec']).copy(deep=True)
+    # Figure out next term value
+    next_term = str(int(current_term) + 5)
+    # Gather roster for next term
+    roster_next_term = roster[roster['Term'] == next_term].copy(deep=True)
+    roster_next_term = separate_cln_dupes(roster_next_term)
+    roster_next_term['Cln Next Term?'] = 'Yes'
+    roster_next_term.drop(labels=['Term'], axis=1, inplace=True)
+    # Drop next term from current roster
+    roster = roster[roster['Term'] == current_term].copy(deep=True)
+    roster = separate_cln_dupes(roster)
+    roster['Cln This Term?'] = 'Yes'
+    # Perform outer join so that we retain students with cln next term
+    roster = pd.merge(roster, roster_next_term, how='outer', on='Student ID', suffixes=['_curr', '_next'])
+    # Put student ID at start
+    roster.insert(0, 'Emplid', roster['Student ID'])
+    roster.drop(labels=['Student ID'], axis=1, inplace=True)
+    # Fill NaNs
+    roster['Cln Next Term?'].fillna(value='No', inplace=True)
+    return roster
+
+def get_historical_student_data (hist_path, students):
+    # Get a good handful of most recent files
+    stud_files = dpu.get_latest(hist_path, 'Student List', num_files=16)
+    # Iterate through files and concatenate all together
+    for i, file in enumerate(stud_files):
+        if i == 0:
+            historical_students = pd.read_excel(file, header=0, converters={'Emplid':str, 'Admit Term':str, 'Latest Term Enrl': str, 'Run Term': str,})
+        else:
+            historical_students = pd.concat([historical_students, pd.read_excel(file, header=0, converters={'Emplid':str, 'Admit Term':str, 'Latest Term Enrl': str, 'Run Term': str,})], ignore_index=True)
+    # Keep only necessary data
+    historical_students = historical_students[['Emplid', 'Last Name', 'First Name', 'Email']]
+    # Drop all true duplicates
+    historical_students.drop_duplicates(inplace=True)
+    # Merge with students
+    historical_students = historical_students.merge(students, on='Emplid', how='left', indicator=True, suffixes=['', 'y'])
+    # Remove any exact matches to current students (this does not help us)
+    historical_students = historical_students[historical_students['_merge'] == 'left_only']
+    # Keep only necessary columns
+    historical_students = historical_students.iloc[:,0:4]
+    # Reset index
+    historical_students.reset_index(drop=True, inplace=True)
+    return historical_students
+
 def read_cb (file):
     '''Function to load Castle Branch report'''
     to_datetime = lambda d: datetime.strptime(d, '%m/%d/%Y')
@@ -21,28 +103,60 @@ def read_cb (file):
     temp.rename(columns={'Email Address':'Email'}, inplace=True)
     return temp
 
-def instructor_contact_info (row, field, faculty, all_faculty_names):
+def instructor_contact_info (row, suffix, faculty, req_list, schedule):
     '''Function to return pd.Series element of requested values.'''
-    x = row[field]
-    # List of the required columns
-    req_list = ['Primary Email', 'Secondary Email', 'Cell Phone']
-    # Ignore blank names
-    if x is np.nan:
-        return pd.Series([None, None, None])
-    # Attempt exact name comparison
-    res = faculty[faculty['Last-First'] == x]
+    # Get ID data
+    row_field = 'Faculty_ID' + '_' + suffix
+    x = row[row_field]
+    # Attempt exact ID comparison
+    res = faculty[faculty['Empl ID'] == x]
     # If results are found, return those results
-    if len(res) != 0:
+    if len(res) == 1:
         return pd.Series([res[x].item() for x in req_list])
-    # Else, attempt to find the most closely matched name
     else:
-        best_guess = dpu.find_best_string_match(x, all_faculty_names)
-        # Attempt exact name comparison with the best_guess
-        res = faculty[faculty['Last-First'] == best_guess]
-        if len(res) != 0:
-            return pd.Series([res[x].item() for x in req_list])
+        # Assume faculty is unhired. Attempt to get faculty name from
+        # schedule and do exact match on name.
+        # Prepare search terms
+        cr_x = 'Cr' + '_' + suffix
+        sec_x = 'Sec' + '_' + suffix
+        # Attempt to gather match
+        res = schedule[(schedule['Cr'] == row[cr_x]) & (schedule['Sec'] == row[sec_x])]
+        # If results are found, gather name
+        if len(res) == 1:
+            row_name = res['Faculty'].item()
+            # Attempt exact name comparison
+            res = faculty[faculty['Last-First'] == row_name]
+            # If results are found, return those results
+            if len(res) == 1:
+                return pd.Series([res[x].item() for x in req_list])
+            else:
+                # Else, attempt to find the most closely matched name
+                # Gather all faculty names into a list
+                all_faculty_names = faculty['Last-First'].unique()
+                # Attempt to find the most closely matched name
+                best_guess = dpu.find_best_string_match(row_name, all_faculty_names)
+                # Attempt exact name comparison with the best_guess
+                res = faculty[faculty['Last-First'] == best_guess]
+                # If results are found, return those results
+                if len(res) == 1:
+                    return pd.Series([res[x].item() for x in req_list])
+                else:
+                    return pd.Series([None for x in req_list])
         else:
-            return pd.Series([None, None, None])
+            return pd.Series([None for x in req_list])
+
+def clinical_info (row, suffix, req_list, schedule):
+    '''Function to return pd.Series element of requested values.'''
+    # Prepare search terms
+    cr_x = 'Cr' + '_' + suffix
+    sec_x = 'Sec' + '_' + suffix
+    # Attempt exact ID comparison
+    res = schedule[(schedule['Cr'] == row[cr_x]) & (schedule['Sec'] == row[sec_x])]
+    # If results are found, return those results
+    if len(res) == 1:
+        return pd.Series([res[x].item() for x in req_list])
+    else:
+        return pd.Series([None for x in req_list])  
 
 def true_match (row, df, field_list):
     '''Function to handle true matches'''
@@ -203,7 +317,7 @@ def archive_old_reports (report_path, report_basename, archive_folder):
         # Rename (i.e., move) old reports
         os.rename(old_path, new_path)
 
-def output_report (df, date_of_report, output_path):
+def output_report (df, date_of_report, output_path, column_names):
     '''Function that primarily applies formatting to excel report.'''
     # File name
     f_name = 'student_report_' + date_of_report.strftime('%Y-%m-%d') + '.xlsx'
@@ -217,32 +331,40 @@ def output_report (df, date_of_report, output_path):
     worksheet = writer.sheets['report']
     # Set zoom
     worksheet.set_zoom(90)
+    
     # Set column sizes
-    worksheet.set_column('A:A', 10)
-    worksheet.set_column('B:C', 15)
+    worksheet.set_column('A:B', 8)
+    worksheet.set_column('C:C', 15)
     worksheet.set_column('D:D', 10)
-    worksheet.set_column('E:E', 25)
-    worksheet.set_column('F:F', 15)
-    worksheet.set_column('G:G', 25)
-    worksheet.set_column('H:H', 15)
-    worksheet.set_column('I:J', 30)
+    worksheet.set_column('E:F', 20)
+    worksheet.set_column('G:G', 15)
+    worksheet.set_column('H:H', 10)
+    worksheet.set_column('I:I', 15)
+    worksheet.set_column('J:J', 10)
     worksheet.set_column('K:K', 15)
-    worksheet.set_column('L:M', 5)
-    worksheet.set_column('O:O', 30)
-    worksheet.set_column('P:P', 10)
-    worksheet.set_column('Q:Q', 15)
+    worksheet.set_column('L:L', 8)
+    worksheet.set_column('M:M', 20)
+    worksheet.set_column('N:N', 15)
+    worksheet.set_column('O:Q', 5)
     worksheet.set_column('R:R', 20)
-    worksheet.set_column('S:S', 25)
-    worksheet.set_column('T:U', 30)
-    worksheet.set_column('V:V', 15)
-    worksheet.set_column('W:X', 5)
-    worksheet.set_column('Y:Y', 30)
-    worksheet.set_column('Z:Z', 10)
-    worksheet.set_column('AA:AA', 15)
-    worksheet.set_column('AB:AB', 20)
-    worksheet.set_column('AC:AC', 25)
-    worksheet.set_column('AD:AE', 30)
-    worksheet.set_column('AF:AF', 15)
+    worksheet.set_column('S:S', 10)
+    worksheet.set_column('T:V', 20)
+    worksheet.set_column('W:W', 15)
+    worksheet.set_column('X:Y', 5)
+    worksheet.set_column('Z:Z', 20)
+    worksheet.set_column('AA:AA', 10)
+    worksheet.set_column('AB:AD', 20)
+    worksheet.set_column('AE:AE', 15)
+    worksheet.set_column('AF:AG', 5)
+    worksheet.set_column('AH:AH', 20)
+    worksheet.set_column('AI:AI', 10)
+    worksheet.set_column('AJ:AL', 20)
+    worksheet.set_column('AM:AM', 15)
+    worksheet.set_column('AN:AO', 5)
+    worksheet.set_column('AP:AP', 20)
+    worksheet.set_column('AQ:AQ', 10)
+    worksheet.set_column('AR:AT', 20)
+    worksheet.set_column('AU:AU', 15)
     
     # Conditional formatting
     # Add a format. Light red fill with dark red text.
@@ -260,9 +382,9 @@ def output_report (df, date_of_report, output_path):
     
     # Define our range for the color formatting
     number_rows = len(df.index)
-    compliant_range = "H2:H{}".format(number_rows+1)
-    changes_range = "G2:G{}".format(number_rows+1)
-    nextdue_range = "K2:K{}".format(number_rows+1)
+    compliant_range = "D2:D{}".format(number_rows+1)
+    changes_range = "C2:C{}".format(number_rows+1)
+    nextdue_range = "G2:G{}".format(number_rows+1)
     
     # Highlight Noncompliant in Red
     worksheet.conditional_format(compliant_range, {'type': 'cell',
@@ -287,6 +409,13 @@ def output_report (df, date_of_report, output_path):
     
     # Apply autofilters
     worksheet.autofilter('A1:AF{}'.format(number_rows+1))
+    # Wrap text on first row
+    wrap_text = workbook.add_format({'text_wrap': 1, 'valign': 'top'})
+    
+    for i, col in column_names:
+        worksheet.write_row((1, {}).format(i), col, wrap_text)
+    
+    worksheet.set_row(0, 30, wrap_text)
     # Apply changes
     writer.save()
 
@@ -354,66 +483,44 @@ def main (prev_date):
     students.drop_duplicates(subset='Emplid', inplace=True)
     # Get the faculty list
     faculty = pd.read_excel(os.path.join(FL.faculty, 'Employee List.xlsx'), header=0, converters={'Empl ID': str,})
+    # Ignore all but necessary faculty columns
+    faculty = faculty[['Empl ID', 'Last-First', 'Primary Email', 'Secondary Email', 'Cell Phone']]
     # Get term descriptions
     TermDescriptions = dpu.get_term_descriptions()
     # Get current term
     current_term = dpu.guess_current_term(TermDescriptions)
-    # Get clinical roster and schedule
+    # Get schedule
     schedule = dpu.get_schedule(current_term, TermDescriptions)
-    clinical_roster = dpu.get_cln(current_term, TermDescriptions)
-    clinical_roster['Student ID'] = clinical_roster['Student ID'].str.zfill(7)
-    # Drop unneeded columns
-    clinical_roster.drop(labels=clinical_roster.columns[12:], axis=1, inplace=True)
-    clinical_roster.drop(labels=clinical_roster.columns[8:11], axis=1, inplace=True)
-    # Gather list of duplicates (i.e., student has more than one clinical course)
-    dupe_truth_value = clinical_roster.duplicated(subset=['Student ID'], keep='first')
-    dupes = clinical_roster.loc[dupe_truth_value].copy(deep=True)
-    dupes.drop(labels=['Term'], axis=1, inplace=True)
-    # Drop duplicates from original list
-    clinical_roster.drop_duplicates(subset=['Student ID'], keep='first', inplace=True)
-    # Merge two lists 
-    clinical_roster = pd.merge(clinical_roster, dupes, how='left', on='Student ID', suffixes=['_1', '_2'])
-    # Put student ID at start
-    clinical_roster.insert(0, 'Emplid', clinical_roster['Student ID'])
-    clinical_roster.drop(labels=['Student ID'], axis=1, inplace=True)
+    # Get clinical roster
+    roster = clean_student_roster(current_term)
     # Merge with student data
-    clinical_roster = pd.merge(clinical_roster, students[['Emplid', 'Last Name', 'First Name', 'Campus', 'Email', 'Best Phone']], how='left', on='Emplid')
-    # Reorder columns
-    cols = ['Emplid', 'Last Name', 'First Name', 'Campus', 'Email', 'Best Phone', 'Term', 'Cr_1', 'Sec_1', 'Clinical Site_1', 'Unit_1', 'Date_1', 'Time_1', 'Instructor_1', 'Cr_2', 'Sec_2', 'Clinical Site_2', 'Unit_2', 'Date_2', 'Time_2', 'Instructor_2']
-    clinical_roster = clinical_roster.reindex(columns= cols)
-    # Ignore all but necessary faculty columns
-    faculty = faculty[['Last-First', 'Primary Email', 'Secondary Email', 'Cell Phone']]
-    # Build list of all faculty names
-    all_faculty_names = faculty['Last-First'].unique()
+    roster = pd.merge(roster, students[['Emplid', 'Last Name', 'First Name', 'Maj Desc', 'Campus', 'Email', 'Best Phone']], how='left', on='Emplid')
+    # Combine with faculty data
     # List of the required columns
     req_list = ['Primary Email', 'Secondary Email', 'Cell Phone']
-    # Iterate through instructors
-    for inst in ['Instructor_1', 'Instructor_2']:
+    # Naming convention for suffixes
+    name_con = ['1_curr', '2_curr', '1_next', '2_next']
+    # Iterate through suffixes (i.e., through instructors)
+    for suffix in name_con:
+        # Create new column names
+        inst = 'Instructor' + '_' + suffix
         new_cols = [inst + ' ' + x for x in req_list]
-        # Get contact info        
-        clinical_roster[new_cols] = clinical_roster.apply(instructor_contact_info, axis=1, args=(inst, faculty, all_faculty_names))
-    
-    # Get a good handful of most recent files
-    stud_files = dpu.get_latest(FL.hist_students, 'Student List', num_files=16)
-    # Iterate through files and concatenate all together
-    for i, file in enumerate(stud_files):
-        if i == 0:
-            historical_students = pd.read_excel(file, header=0, converters={'Emplid':str, 'Admit Term':str, 'Latest Term Enrl': str, 'Run Term': str,})
-        else:
-            historical_students = pd.concat([historical_students, pd.read_excel(file, header=0, converters={'Emplid':str, 'Admit Term':str, 'Latest Term Enrl': str, 'Run Term': str,})], ignore_index=True)
-    # Keep only necessary data
-    historical_students = historical_students[['Emplid', 'Last Name', 'First Name', 'Email']]
-    # Drop all true duplicates
-    historical_students.drop_duplicates(inplace=True)
-    # Merge with students
-    historical_students = historical_students.merge(students, on='Emplid', how='left', indicator=True, suffixes=['', 'y'])
-    # Remove any exact matches to current students (this does not help us)
-    historical_students = historical_students[historical_students['_merge'] == 'left_only']
-    # Keep only necessary columns
-    historical_students = historical_students.iloc[:,0:4]
-    # Reset index
-    historical_students.reset_index(drop=True, inplace=True)
-    
+        # Apply search function
+        roster[new_cols] = roster.apply(instructor_contact_info, axis=1, args=(suffix, faculty, req_list, schedule))
+    # Drop Faculty ID Fields
+    id_fields = ['Faculty_ID_' + suffix for suffix in name_con]
+    roster.drop(labels=id_fields, axis=1, inplace=True)
+    # Combine with schedule data
+    # List of the required columns
+    req_list = ['Clinical Site', 'Unit', 'Time']
+    # Iterate through suffixes
+    for suffix in name_con:
+        # Create new column names
+        new_cols = [x + '_' + suffix for x in req_list]
+        # Apply search function
+        roster[new_cols] = roster.apply(clinical_info, axis=1, args=(suffix, req_list, schedule))
+    # Gather historical student data
+    historical_students = get_historical_student_data(FL.hist_students, students)
     # Collection of tracker names
     all_trackers = np.concatenate((compliant_curr['To-Do List Name'].unique(), noncompliant_curr['To-Do List Name'].unique()))
     all_trackers = np.unique(all_trackers)
@@ -436,20 +543,20 @@ def main (prev_date):
     cb_to_dpu = {}
     # Attempt to match students, starting with full accounts
     # Sometimes the dna account is all we get, even though they have full
-    clinical_roster.apply(match_students, axis=1, args=(noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(student_trackers)], cb_to_dpu), historic=historical_students);
-    clinical_roster.apply(match_students, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(student_trackers)], cb_to_dpu), historic=historical_students);
-    clinical_roster.apply(match_students, axis=1, args=(noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(dna_trackers)], cb_to_dpu));
-    clinical_roster.apply(match_students, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(dna_trackers)], cb_to_dpu));
+    roster.apply(match_students, axis=1, args=(noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(student_trackers)], cb_to_dpu), historic=historical_students);
+    roster.apply(match_students, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(student_trackers)], cb_to_dpu), historic=historical_students);
+    roster.apply(match_students, axis=1, args=(noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(dna_trackers)], cb_to_dpu));
+    roster.apply(match_students, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(dna_trackers)], cb_to_dpu));
     
     # New column names
     fields = ['Changed Since ' + noncompliant_files[1].rstrip('.csv')[-10:], 'Compliant', 'Requirements Incomplete', 'Next Due', 'Next Due Date']
     # Gather compliance status
-    clinical_roster[fields] = clinical_roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date))
+    roster[fields] = roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date))
     
     # Revise order of columns
-    cols = clinical_roster.columns.tolist()
-    new_order = cols[:6] + cols[27:] + cols[6:14] + cols[21:24] + cols[14:21] + cols[24:27]
-    clinical_roster = clinical_roster[new_order]
+    cols = roster.columns.tolist()
+    new_order = cols[6:7] + cols[11:12] + cols[42:47] + cols[0:1] + cols[12:18] + cols[1:4] + cols[30:33] + cols[18:21] + cols[4:6] + cols[33:36] + cols[21:24] + cols[7:9] + cols[36:39] + cols[24:27] + cols[9:11] + cols[39:42] + cols[27:30]
+    roster = roster[new_order]
     
     # Archive old reports
     archive_old_reports(FL.health_req_report, 'student_report', 'Archived Student Reports')
@@ -457,7 +564,7 @@ def main (prev_date):
     # Output to file
     date_of_current = noncompliant_files[0].rstrip('.csv')[-10:]
     date_of_current = datetime.strptime(date_of_current, '%Y-%m-%d')
-    output_report(clinical_roster, date_of_current, FL.health_req_report)
+    output_report(roster, date_of_current, FL.health_req_report, roster.columns)
 
 if __name__ == "__main__":
     main()
