@@ -183,6 +183,8 @@ def get_student_roster ():
     file = get_latest(starting_path, 'NSG_STDNT_ROSTER')
     # Read data
     rosters = pd.read_excel(file, skiprows=[0], header=0, converters={'Term':str, 'Student ID':str, 'Catalog':str, 'Section':str, 'Class Nbr':str, 'Faculty_ID':str})
+    # Remove extra space in course numbers
+    rosters['Catalog'] = rosters['Catalog'].apply(lambda x: x.strip())
     return rosters
 
 def find_best_string_match (query, choices, **kwargs):
