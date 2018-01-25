@@ -176,6 +176,15 @@ def get_schedule (term, TermDescriptions):
     schedule = pd.read_excel(file, sheet_name=q, header=0,converters={'Cr':str, 'Term':str})
     return schedule
 
+def get_student_roster ():
+    # Define schedule starting path
+    starting_path = FL.rosters
+    # Find most recent
+    file = get_latest(starting_path, 'NSG_STDNT_ROSTER')
+    # Read data
+    rosters = pd.read_excel(file, skiprows=[0], header=0, converters={'Term':str, 'Student ID':str, 'Catalog':str, 'Section':str, 'Class Nbr':str, 'Faculty_ID':str})
+    return rosters
+
 def find_best_string_match (query, choices, **kwargs):
     '''This function takes a single query and a list of possible
     choices and ranks the choices to find the most likely match.
