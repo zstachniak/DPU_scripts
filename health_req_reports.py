@@ -345,36 +345,37 @@ def output_report (df, date_of_report, output_path, column_names):
     worksheet.set_column('L:L', 8)
     worksheet.set_column('M:M', 20)
     worksheet.set_column('N:N', 15)
-    worksheet.set_column('O:Q', 5)
+    worksheet.set_column('O:O', 5)
+    worksheet.set_column('P:Q', 6)
     worksheet.set_column('R:R', 20)
-    worksheet.set_column('S:S', 10)
+    worksheet.set_column('S:S', 11)
     worksheet.set_column('T:V', 20)
     worksheet.set_column('W:W', 15)
-    worksheet.set_column('X:Y', 5)
+    worksheet.set_column('X:Y', 6)
     worksheet.set_column('Z:Z', 20)
-    worksheet.set_column('AA:AA', 10)
+    worksheet.set_column('AA:AA', 11)
     worksheet.set_column('AB:AD', 20)
     worksheet.set_column('AE:AE', 15)
-    worksheet.set_column('AF:AG', 5)
+    worksheet.set_column('AF:AG', 6)
     worksheet.set_column('AH:AH', 20)
-    worksheet.set_column('AI:AI', 10)
+    worksheet.set_column('AI:AI', 11)
     worksheet.set_column('AJ:AL', 20)
     worksheet.set_column('AM:AM', 15)
-    worksheet.set_column('AN:AO', 5)
+    worksheet.set_column('AN:AO', 6)
     worksheet.set_column('AP:AP', 20)
-    worksheet.set_column('AQ:AQ', 10)
+    worksheet.set_column('AQ:AQ', 11)
     worksheet.set_column('AR:AT', 20)
     worksheet.set_column('AU:AU', 15)
     
     # Conditional formatting
     # Add a format. Light red fill with dark red text.
-    format1 = workbook.add_format({'bg_color': '#FFC7CE',
+    red = workbook.add_format({'bg_color': '#FFC7CE',
                                    'font_color': '#9C0006'})
     # Add a format. Green fill with dark green text.
-    format2 = workbook.add_format({'bg_color': '#C6EFCE',
+    green = workbook.add_format({'bg_color': '#C6EFCE',
                                    'font_color': '#006100'})
     # Add a format. Yellow fill with black text.
-    format3 = workbook.add_format({'bg_color': '#FFFF99',
+    yellow = workbook.add_format({'bg_color': '#FFFF99',
                                    'font_color': '#000000',
                                    'num_format': 'mm/dd/yyyy'})
     # Add a format. Date
@@ -390,32 +391,35 @@ def output_report (df, date_of_report, output_path, column_names):
     worksheet.conditional_format(compliant_range, {'type': 'cell',
                                                    'criteria': 'equal to',
                                                    'value': '"No"',
-                                                   'format': format1})
+                                                   'format': red})
     # Highlight changes in Green
     worksheet.conditional_format(changes_range, {'type': 'cell',
                                                    'criteria': 'equal to',
                                                    'value': 'TRUE',
-                                                   'format': format2})
+                                                   'format': green})
     # Highlight next due in Yellow
     worksheet.conditional_format(nextdue_range, {'type': 'date',
-                                                   'criteria': 'less than',
-                                                   'value': date_of_report + timedelta(days=60),
-                                                   'format': format3})
+                                                   'criteria': 'between',
+                                                   'minimum': date_of_report,
+                                                   'maximum': date_of_report + timedelta(days=60),
+                                                   'format': yellow})
     # Format date for rest of column
     worksheet.conditional_format(nextdue_range, {'type': 'date',
                                                    'criteria': 'greater than',
                                                    'value': date_of_report + timedelta(days=60),
                                                    'format': date_format})
     
+    # Freeze panes on top row
+    worksheet.freeze_panes(1, 0)
     # Apply autofilters
     worksheet.autofilter('A1:AF{}'.format(number_rows+1))
+    # Wrap text formatter
+    wrap_text = workbook.add_format({'text_wrap': 1, 'valign': 'top', 'bold': True, 'bottom': True})
     # Wrap text on first row
-    wrap_text = workbook.add_format({'text_wrap': 1, 'valign': 'top'})
+    for i, col in enumerate(column_names):
+        worksheet.write(0, i, col, wrap_text)
     
-    for i, col in column_names:
-        worksheet.write_row((1, {}).format(i), col, wrap_text)
-    
-    worksheet.set_row(0, 30, wrap_text)
+    #worksheet.set_row(0, 30, wrap_text)
     # Apply changes
     writer.save()
 
