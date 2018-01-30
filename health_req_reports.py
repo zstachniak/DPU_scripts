@@ -14,26 +14,18 @@ import dpu.scripts as dpu
 from dpu.file_locator import FileLocator
 import click
 
-'''
-Need to add Program of Study
-Filter out obvious non-necessary course types, numbers
-use excel schedule as backup for unhired faculty
-Field for: [Currently in Clinical] & [Registered for CLN next Quarter]
-
-
-'''
-def separate_cln_dupes (df):
+def separate_cln_dupes (df, groupby='Student ID'):
     '''Separates out clinicals when one student has two courses.'''
     # Sort by course number
     df.sort_values(by='Cr', inplace=True)
     # Gather list of duplicates (i.e., student has more than one clinical)
-    dupe_truth_value = df.duplicated(subset=['Student ID'], keep='first')
+    dupe_truth_value = df.duplicated(subset=[groupby], keep='first')
     dupes = df.loc[dupe_truth_value].copy(deep=True)
     dupes.drop(labels=['Term'], axis=1, inplace=True)
     # Drop duplicates from original list
-    df.drop_duplicates(subset=['Student ID'], keep='first', inplace=True)
+    df.drop_duplicates(subset=[groupby], keep='first', inplace=True)
     # Merge two lists 
-    df = pd.merge(df, dupes, how='left', on='Student ID', suffixes=['_1', '_2'])
+    df = pd.merge(df, dupes, how='left', on=groupby, suffixes=['_1', '_2'])
     return df
 
 def clean_student_roster (current_term):
@@ -58,19 +50,106 @@ def clean_student_roster (current_term):
     # Gather roster for next term
     roster_next_term = roster[roster['Term'] == next_term].copy(deep=True)
     roster_next_term = separate_cln_dupes(roster_next_term)
-    roster_next_term['Cln Next Term?'] = 'Yes'
+    roster_next_term['Cln Next Term?'] = True
     roster_next_term.drop(labels=['Term'], axis=1, inplace=True)
     # Drop next term from current roster
     roster = roster[roster['Term'] == current_term].copy(deep=True)
     roster = separate_cln_dupes(roster)
-    roster['Cln This Term?'] = 'Yes'
+    roster['Cln This Term?'] = True
     # Perform outer join so that we retain students with cln next term
     roster = pd.merge(roster, roster_next_term, how='outer', on='Student ID', suffixes=['_curr', '_next'])
     # Put student ID at start
     roster.insert(0, 'Emplid', roster['Student ID'])
     roster.drop(labels=['Student ID'], axis=1, inplace=True)
     # Fill NaNs
-    roster['Cln Next Term?'].fillna(value='No', inplace=True)
+    roster['Cln Next Term?'].fillna(value=False, inplace=True)
+    return roster
+
+def contains_CLN (row):
+    '''Simple function to return if any clinical or lab exists in groupby'''
+    return any([x in row['Type'].unique() for x in ['CLN', 'PRA', 'LAB']])
+
+def get_cln_site (row):
+    '''Concatenate all clinical sites (if exist) in groupby'''
+    # Convert courses and sections to list
+    cr = row['Cr'].tolist()
+    sec = row['Sec'].tolist()
+    sites = []
+    # Get site from global(schedule)
+    for c, s in zip(cr, sec):
+        res = schedule[(schedule['Cr'] == c) & (schedule['Sec'] == s)]
+        # Ignore Nulls and NaNs
+        if len(res) == 1:
+            if type(res['Clinical Site'].item()) == str:
+                sites.append(res['Clinical Site'].item())
+    # Return concatenated list of unique sites
+    return ', '.join(np.unique(sites))
+
+def cr_sec (row):
+    '''Concatenate courses and sections in groupby'''
+    # Convert courses and sections to list
+    cr = row['Cr'].tolist()
+    sec = row['Sec'].tolist()
+    # Return list of combined Cr-Sec
+    return ', '.join(['-'.join([c, s]) for c, s in zip(cr, sec)])
+
+def group_faculty (df, term='This'):
+    '''Takes list of non-unique faculty teaching assignments and converts
+    to unique through series of groupby operations.'''
+    # Reindex
+    df = df.set_index(['Faculty_ID'])
+    # Teaching a clinical this term?
+    df['Cln ' + term + ' Term?'] = df.groupby(by='Faculty_ID').apply(contains_CLN)
+    # All Cr-Sec pairs
+    df['Courses'] = df.groupby(by='Faculty_ID').apply(cr_sec)
+    # All clinical sites will be attending
+    df['Cln Sites'] = df.groupby(by='Faculty_ID').apply(get_cln_site)
+    # Drop unneeded and reset index
+    df.drop(labels=['Term', 'Cr', 'Sec', 'Type', 'Class Nbr'], axis=1, inplace=True)
+    df.reset_index(inplace=True)
+    # Drop duplicates
+    df.drop_duplicates(inplace=True)
+    return df
+
+def clean_faculty_roster (current_term):
+    '''Simple function to load and clean the faculty roster.'''
+    # Download student rosters
+    roster = dpu.get_student_roster()
+    # Range of Anesthesia courses that we simply don't care about
+    ignore_courses = [str(x) for x in range(500, 517)] + [str(x) for x in range(600, 617)]
+    # Filter rosters
+    roster = roster[(~roster['Cr'].isin(ignore_courses)) & (roster['Role'] != 'SI')].copy(deep=True)
+    # Drop unneeded fields
+    roster.drop(labels=['Student ID', 'Student Name', 'Student Major', 'Subject', 'Role', 'Mode'], axis=1, inplace=True)
+    # Drop any true duplicates
+    roster.drop_duplicates(inplace=True)
+    # Sort by faculty and drop duplicates (excluding faculty)
+    # Takes care of 301 issue (due to changing course times)
+    roster = roster.sort_values(by='Faculty_ID').drop_duplicates(subset=['Term', 'Cr', 'Sec', 'Type']).copy(deep=True)
+    #
+    # NOTE: NaN faculty would still exist here
+    #
+    # Figure out next term value
+    next_term = str(int(current_term) + 5)
+    # Gather roster for next term
+    roster_next_term = roster[roster['Term'] == next_term].copy(deep=True)
+    # Drop next term from current roster
+    roster = roster[roster['Term'] == current_term].copy(deep=True)
+    # Groupby faculty
+    roster = group_faculty(roster)
+    # If courses exist for next term, groupby the faculty
+    if len(roster_next_term) > 0:
+        roster_next_term = group_faculty(roster_next_term, term='Next')
+    # Else, create a blank df
+    else:
+        roster_next_term = roster[roster['Faculty_ID'] == 0]
+        roster_next_term = roster_next_term.rename(columns={'Cln This Term?': 'Cln Next Term?'}).copy(deep=True)
+    # Perform outer join so that we retain faculty with cln next term
+    roster = pd.merge(roster, roster_next_term, how='outer', on='Faculty_ID', suffixes=['_curr', '_next'])
+    # Fill NaNs
+    roster['Cln Next Term?'].fillna(value=False, inplace=True)
+    # Rename ID field for ease
+    roster = roster.rename(columns={'Faculty_ID': 'Emplid'}).copy(deep=True)
     return roster
 
 def get_historical_student_data (hist_path, students):
@@ -158,10 +237,17 @@ def clinical_info (row, suffix, req_list, schedule):
     else:
         return pd.Series([None for x in req_list])  
 
-def true_match (row, df, field_list):
-    '''Function to handle true matches'''
-    for field in field_list:
-        df = df[df[field].apply(lambda x: x.lower().strip()) == row[field].lower().strip()]
+def true_match (row, df, left_fields, **kwargs):
+    '''Function to handle true matches. If only left_fields are passed
+    function will assume field names match. If right fields are passed
+    function will process as differently named.'''
+    right_fields = kwargs.pop('right_fields', None)
+    if right_fields:
+        for left, right in zip(left_fields, right_fields):
+            df = df[df[left].apply(lambda x: x.lower().strip()) == row[right].lower().strip()]
+    else:
+        for field in left_fields:
+            df = df[df[field].apply(lambda x: x.lower().strip()) == row[field].lower().strip()]
     return df
 
 def partial_name_match (query, possibilities):
@@ -239,58 +325,187 @@ def match_students (row, df, output_dict, **kwargs):
                 else:
                     return
 
-def determine_status (row, id_dict, noncompliant_df, compliant_df, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date):
+def match_faculty (row, df, output_dict, **kwargs):
+    '''Match student IDs with their CB lookup values.'''
+    # Gather optional keyword arguments
+    historic = kwargs.pop('historic', None)
+    # Save faculty ID
+    faculty = row['Emplid']
+    # Check to see that faculty has not already been matched
+    if faculty not in output_dict.keys():
+        # Attempt a true match on primary email address
+        if not pd.isnull(row['Primary Email']):
+            res = true_match(row, df, ['Email'], right_fields=['Primary Email'])
+        else:
+            res = []
+        if len(res) >= 1:
+            # If successful, add to dictionary
+            output_dict[faculty] = gather_output(res)
+            return
+        else:
+            # Else, attempt a true match on secondary email address
+            if not pd.isnull(row['Secondary Email']):
+                res = true_match(row, df, ['Email'], right_fields=['Secondary Email'])
+            else:
+                res = []
+            if len(res) >= 1:
+                # If successful, add to dictionary
+                output_dict[faculty] = gather_output(res)
+                return
+            else:
+                # Else, attempt a true match on Last, First
+                res = true_match(row, df, ['Last Name', 'First Name'])
+                if len(res) >= 1:
+                    # If successful, add to dictionary
+                    output_dict[faculty] = gather_output(res)
+                    return
+                else:
+
+                    # If user requests, test against possible historic data
+                    if historic is not None:
+                        # Search for previous (i.e., different) matches by ID
+                        previous = true_match(row, historic, ['Emplid'])
+                        if len(previous) > 0:
+                            # If a match exists, try out each match
+                            for idx in range(len(previous)):
+                                prev = previous.iloc[idx]
+                                # Attempt a true match on email address
+                                res = true_match(prev, df, ['Email'])
+                                if len(res) >= 1:
+                                    # If successful, add to dictionary
+                                    output_dict[faculty] = gather_output(res)
+                                    return
+                                # Else, attempt a true match on Last, First
+                                else:
+                                    res = true_match(prev, df, ['Last Name', 'First Name'])
+                                    if len(res) >= 1:
+                                        # If successful, add to dictionary
+                                        output_dict[faculty] = gather_output(res)
+                                        return
+                
+                    # Finally, try a match using partial first name
+                    # Should help with issues of middle name
+                    res = true_match(row, df, ['Last Name'])
+                    if len(res) >= 1:
+                        # Gather partial name match
+                        partial = partial_name_match(row['First Name'].lower().strip(), res['First Name'].apply(lambda x: x.lower().strip()).tolist())
+                        res = res[res['First Name'].apply(lambda x: x.lower().strip()) == partial]
+                        # If successful, add to dictionary
+                        if len(res) >= 1:
+                            output_dict[faculty] = gather_output(res)
+                            return
+                    
+                    # If still unsuccessful, give up
+                    else:
+                        return
+
+def check_compliance (person, df, df_changelog, df_next_action, test='noncompliant'):
+    '''A wrapper function to check for compliance for a single person.
+    Returns status along with incomplete and next due items.'''
+    # Set various status outcomes based on test type
+    if test == 'noncompliant':
+        status_result = 'No'
+    elif test == 'compliant':
+        status_result = 'Yes'
+        reqs_incomplete = None
+    elif test == 'dna_compliant':
+        status_result = 'No'
+        reqs_incomplete = 'Has met D&A but not registered for health req tracker'
+    elif test == 'dna_noncompliant':
+        status_result = 'No'
+        reqs_incomplete = 'Has not registered for an account'
+        
+    # Attempt true match between person and df
+    match = true_match(person, df, ['Email'])
+    # If a match exists...
+    if len(match) >= 1:
+        # If more than one result...
+        if len(match) > 1:
+            # Noncompliant ONLY
+            if test == 'noncompliant':
+                # Concatenate all incomplete requirements
+                reqs_incomplete = ', '.join(match['Requirements Incomplete'].tolist())
+            # Check if this is an update from last time
+            changed = all([(match.values[i] == df_changelog.values).all(1).any() for i in range(len(match.values))])
+        elif len(match) == 1:
+            # Noncompliant ONLY
+            if test == 'noncompliant':
+                # Gather all incomplete requirements
+                reqs_incomplete = match['Requirements Incomplete'].item()
+            # Check if this is an update from last time
+            changed = (match.values == df_changelog.values).all(1).any()
+        # Check next due
+        next_due = true_match(person, df_next_action, ['Email'])
+        # If a match exists...
+        if len(next_due) > 1:        
+            # Convert due dates to datetime objects
+            next_due.loc[:, 'Requirement Due Date'] = next_due['Requirement Due Date'].apply(lambda x: datetime.strptime(x, '%m/%d/%Y'))
+            #next_due['Requirement Due Date'] = next_due['Requirement Due Date'].copy(deep=True).apply(lambda x: datetime.strptime(x, '%m/%d/%Y'))
+            # Get the nearest due date
+            next_due_date = next_due['Requirement Due Date'].min()
+            # Keep only nearest requirement
+            next_due = next_due[next_due['Requirement Due Date'] == next_due_date]
+            # If more than one result...
+            if len(next_due) > 1:
+                # Concatenate the results
+                next_due_req = ', '.join(next_due['Requirement Name'].tolist())
+            else:
+                # Else, take single result
+                next_due_req = next_due['Requirement Name'].item()
+        elif len(next_due) == 1:
+            # Convert due date to datetime object
+            next_due_date = datetime.strptime(next_due['Requirement Due Date'].item(), '%m/%d/%Y')
+            # Take single result
+            next_due_req = next_due['Requirement Name'].item()
+        else:
+            # If no next due items, return None
+            next_due_req = None
+            next_due_date = None
+        # Return required fields
+        return pd.Series([changed, status_result, reqs_incomplete, next_due_req, next_due_date])
+    # If no results, return empty Series
+    else:
+        return pd.Series()
+
+def determine_status (row, id_dict, noncompliant_df, compliant_df, noncompliant_changelog, compliant_changelog, tracker_1, tracker_2, next_action_date, account):
     '''Gather CB compliance stats'''
     # Get ID
     key = id_dict.get(row['Emplid'], None)
     # If ID doesn't exist, can't identify student
     if not key:
         # If unable to identify student
-        return pd.Series([None, 'No', ['Could Not Identify Student'], None, None])
+        return pd.Series([None, 'No', ['Could Not Identify CB Account'], None, None])
     # Store connection key
     conn = pd.Series(data={'Last Name':key[0], 'First Name':key[1], 'Email':key[2]})
     
-    # Check for compliance
-    compliant = true_match(conn, compliant_df[compliant_df['To-Do List Name'].isin(student_trackers)], ['Email'])
-    if len(compliant) == 1:
-        # Check if this is an update from last time
-        changed = (compliant.values == compliant_changelog.values).all(1).any()
-        # Return required fields
-        return pd.Series([changed, 'Yes', None, compliant['Name of Next Requirement Due'].item(), datetime.strptime(compliant['Next Action Date'].item(), '%m/%d/%Y')])
+    # Check for noncompliance in tracker_1
+    result = check_compliance(conn, noncompliant_df[noncompliant_df['To-Do List Name'].isin(tracker_1)].copy(deep=True), noncompliant_changelog, next_action_date, test='noncompliant')
+    if len(result) != 0:
+        return result
+    # Check for compliance in tracker_1
+    result = check_compliance(conn, compliant_df[compliant_df['To-Do List Name'].isin(tracker_1)].copy(deep=True), compliant_changelog, next_action_date, test='compliant')
+    if len(result) != 0:
+        return result
+    
+    if account == 'faculty':
+        # Check for non-compliance in tracker_2
+        result = check_compliance(conn, noncompliant_df[noncompliant_df['To-Do List Name'].isin(tracker_2)].copy(deep=True), noncompliant_changelog, next_action_date, test='noncompliant')
+        if len(result) != 0:
+            return result
+        # Check for compliance in tracker_2
+        result = check_compliance(conn, compliant_df[compliant_df['To-Do List Name'].isin(tracker_2)].copy(deep=True), compliant_changelog, next_action_date, test='compliant')
+        if len(result) != 0:
+            return result
         
-    # Check for noncompliance
-    noncompliant = true_match(conn, noncompliant_df[noncompliant_df['To-Do List Name'].isin(student_trackers)], ['Email'])
-    if len(noncompliant) >= 1:
-        # If more than one result, simply take the first
-        noncompliant = noncompliant.iloc[0]
-        # Check if this is an update from last time
-        changed = (noncompliant.values == noncompliant_changelog.values).all(1).any()
-        # Check 
-        next_due = true_match(conn, next_action_date, ['Email'])
-        if len(next_due) == 1:
-            next_due_req = next_due['Requirement Name'].item()
-            next_due_date = datetime.strptime(next_due['Requirement Due Date'].item(), '%m/%d/%Y')
-        else:
-            next_due_req = None
-            next_due_date = None
-        # Return required fields
-        return pd.Series([changed, 'No', noncompliant['Requirements Incomplete'], next_due_req, next_due_date])
-    
-    # Check for students who have only completed D&A
-    dna = true_match(conn, compliant_df[compliant_df['To-Do List Name'].isin(dna_trackers)], ['Email'])
-    if len(dna) == 1:
-        # Check if this is an update from last time
-        changed = (dna.values == compliant_changelog.values).all(1).any()
-        # Return required fields
-        return pd.Series([changed, 'No', 'Student has met D&A but not registered for health req tracker', None, None])
-    
-    # Check for students who have no account
-    dna = true_match(conn, noncompliant_df[noncompliant_df['To-Do List Name'].isin(dna_trackers)], ['Email'])
-    if len(dna) == 1:
-        # Check if this is an update from last time
-        changed = (dna.values == noncompliant_changelog.values).all(1).any()
-        # Return required fields
-        return pd.Series([changed, 'No', 'Student has not registered for an account', None, None])
+    elif account == 'student':
+        # Check for compliance in tracker_2
+        result = check_compliance(conn, compliant_df[compliant_df['To-Do List Name'].isin(tracker_2)].copy(deep=True), compliant_changelog, next_action_date, test='dna_compliant')
+        if len(result) != 0:
+            return result
+        # Check for non-compliance in tracker_2
+        result = check_compliance(conn, noncompliant_df[noncompliant_df['To-Do List Name'].isin(tracker_2)].copy(deep=True), noncompliant_changelog, next_action_date, test='dna_noncompliant')
+        if len(result) != 0:
+            return result
 
 def archive_old_reports (report_path, report_basename, archive_folder):
     '''Function to move all old reports into an archive folder.'''
@@ -418,8 +633,92 @@ def output_report (df, date_of_report, output_path, column_names):
     # Wrap text on first row
     for i, col in enumerate(column_names):
         worksheet.write(0, i, col, wrap_text)
+    # Apply changes
+    writer.save()
+
+def output_fac_report (df, date_of_report, output_path, column_names):
+    '''Function that primarily applies formatting to excel report.'''
+    # File name
+    f_name = 'faculty_report_' + date_of_report.strftime('%Y-%m-%d') + '.xlsx'
+    f_name = os.path.join(output_path, f_name)
+    # Initialize a writer
+    writer = pd.ExcelWriter(f_name, engine='xlsxwriter')
+    # Write data
+    df.to_excel(writer, index=False, sheet_name='report')
+    # Access the worksheet
+    workbook = writer.book
+    worksheet = writer.sheets['report']
+    # Set zoom
+    worksheet.set_zoom(90)
     
-    #worksheet.set_row(0, 30, wrap_text)
+    # Set column sizes
+    worksheet.set_column('A:B', 8)
+    worksheet.set_column('C:C', 15)
+    worksheet.set_column('D:D', 10)
+    worksheet.set_column('E:F', 20)
+    worksheet.set_column('G:G', 15)
+    worksheet.set_column('H:H', 10)
+    worksheet.set_column('I:I', 15)
+    worksheet.set_column('J:J', 10)
+    worksheet.set_column('K:L', 20)
+    worksheet.set_column('M:M', 15)
+    worksheet.set_column('M:M', 20)
+    worksheet.set_column('N:N', 20)
+    worksheet.set_column('O:O', 40)
+    worksheet.set_column('P:P', 20)
+    worksheet.set_column('Q:Q', 40)
+    
+    # Conditional formatting
+    # Add a format. Light red fill with dark red text.
+    red = workbook.add_format({'bg_color': '#FFC7CE',
+                                   'font_color': '#9C0006'})
+    # Add a format. Green fill with dark green text.
+    green = workbook.add_format({'bg_color': '#C6EFCE',
+                                   'font_color': '#006100'})
+    # Add a format. Yellow fill with black text.
+    yellow = workbook.add_format({'bg_color': '#FFFF99',
+                                   'font_color': '#000000',
+                                   'num_format': 'mm/dd/yyyy'})
+    # Add a format. Date
+    date_format = workbook.add_format({'num_format': 'mm/dd/yyyy'})
+    
+    # Define our range for the color formatting
+    number_rows = len(df.index)
+    compliant_range = "D2:D{}".format(number_rows+1)
+    changes_range = "C2:C{}".format(number_rows+1)
+    nextdue_range = "G2:G{}".format(number_rows+1)
+    
+    # Highlight Noncompliant in Red
+    worksheet.conditional_format(compliant_range, {'type': 'cell',
+                                                   'criteria': 'equal to',
+                                                   'value': '"No"',
+                                                   'format': red})
+    # Highlight changes in Green
+    worksheet.conditional_format(changes_range, {'type': 'cell',
+                                                   'criteria': 'equal to',
+                                                   'value': 'TRUE',
+                                                   'format': green})
+    # Highlight next due in Yellow
+    worksheet.conditional_format(nextdue_range, {'type': 'date',
+                                                   'criteria': 'between',
+                                                   'minimum': date_of_report,
+                                                   'maximum': date_of_report + timedelta(days=60),
+                                                   'format': yellow})
+    # Format date for rest of column
+    worksheet.conditional_format(nextdue_range, {'type': 'date',
+                                                   'criteria': 'greater than',
+                                                   'value': date_of_report + timedelta(days=60),
+                                                   'format': date_format})
+    
+    # Freeze panes on top row
+    worksheet.freeze_panes(1, 0)
+    # Apply autofilters
+    worksheet.autofilter('A1:Q{}'.format(number_rows+1))
+    # Wrap text formatter
+    wrap_text = workbook.add_format({'text_wrap': 1, 'valign': 'top', 'bold': True, 'bottom': True})
+    # Wrap text on first row
+    for i, col in enumerate(column_names):
+        worksheet.write(0, i, col, wrap_text)
     # Apply changes
     writer.save()
 
@@ -494,6 +793,7 @@ def main (prev_date):
     # Get current term
     current_term = dpu.guess_current_term(TermDescriptions)
     # Get schedule
+    global schedule
     schedule = dpu.get_schedule(current_term, TermDescriptions)
     # Get clinical roster
     roster = clean_student_roster(current_term)
@@ -525,6 +825,15 @@ def main (prev_date):
         roster[new_cols] = roster.apply(clinical_info, axis=1, args=(suffix, req_list, schedule))
     # Gather historical student data
     historical_students = get_historical_student_data(FL.hist_students, students)
+    
+    # Get a faculty roster for health_req report
+    faculty_roster = clean_faculty_roster(current_term)
+    # Merge with faculty contact info
+    faculty_roster = pd.merge(faculty_roster, faculty, left_on='Emplid', right_on='Empl ID')
+    # Separate out names
+    faculty_roster['Last Name'] = faculty_roster['Last-First'].apply(lambda x: x.split(', ')[0])
+    faculty_roster['First Name'] = faculty_roster['Last-First'].apply(lambda x: x.split(', ')[1])
+    
     # Collection of tracker names
     all_trackers = np.concatenate((compliant_curr['To-Do List Name'].unique(), noncompliant_curr['To-Do List Name'].unique()))
     all_trackers = np.unique(all_trackers)
@@ -551,24 +860,39 @@ def main (prev_date):
     roster.apply(match_students, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(student_trackers)], cb_to_dpu), historic=historical_students);
     roster.apply(match_students, axis=1, args=(noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(dna_trackers)], cb_to_dpu));
     roster.apply(match_students, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(dna_trackers)], cb_to_dpu));
+    # Faculty matching    
+    cb_to_fac = {}
+    faculty_roster.apply(match_faculty, axis=1, args=(noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(faculty_trackers)], cb_to_fac));
+    faculty_roster.apply(match_faculty, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(faculty_trackers)], cb_to_fac));
+    faculty_roster.apply(match_faculty, axis=1, args=(noncompliant_curr[noncompliant_curr['To-Do List Name'].isin(student_trackers)], cb_to_fac));
+    faculty_roster.apply(match_faculty, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(student_trackers)], cb_to_fac));
     
     # New column names
     fields = ['Changed Since ' + noncompliant_files[1].rstrip('.csv')[-10:], 'Compliant', 'Requirements Incomplete', 'Next Due', 'Next Due Date']
     # Gather compliance status
-    roster[fields] = roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date))
+    #roster[fields] = roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date))
+    roster[fields] = roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date), account='student')
+    # Gather compliance status
+    faculty_roster[fields] = faculty_roster.apply(determine_status, axis=1, args=(cb_to_fac, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, faculty_trackers, student_trackers, next_action_date), account='faculty')
     
     # Revise order of columns
     cols = roster.columns.tolist()
     new_order = cols[6:7] + cols[11:12] + cols[42:47] + cols[0:1] + cols[12:18] + cols[1:4] + cols[30:33] + cols[18:21] + cols[4:6] + cols[33:36] + cols[21:24] + cols[7:9] + cols[36:39] + cols[24:27] + cols[9:11] + cols[39:42] + cols[27:30]
     roster = roster[new_order]
+    # Revise order for faculty
+    cols = faculty_roster.columns.tolist()    
+    new_order = cols[1:2] + cols[4:5] + cols[14:19] + cols[0:1] + cols[12:14] + cols[9:12] + cols[2:4] + cols[5:7]
+    faculty_roster = faculty_roster[new_order]
     
     # Archive old reports
     archive_old_reports(FL.health_req_report, 'student_report', 'Archived Student Reports')
+    archive_old_reports(FL.health_req_report, 'faculty_report', 'Archived Faculty Reports')
     
     # Output to file
     date_of_current = noncompliant_files[0].rstrip('.csv')[-10:]
     date_of_current = datetime.strptime(date_of_current, '%Y-%m-%d')
     output_report(roster, date_of_current, FL.health_req_report, roster.columns)
+    output_fac_report(faculty_roster, date_of_current, FL.health_req_report, faculty_roster.columns)
 
 if __name__ == "__main__":
     main()
