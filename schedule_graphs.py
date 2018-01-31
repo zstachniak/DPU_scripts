@@ -12,50 +12,12 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import click
 import re
+import dpu.scripts as dpu
+from dpu.file_locator import FileLocator
 
 #############################################################
 # Functions
 #############################################################
-
-def get_latest (pathname):
-    '''Scans the folder for all files that match the typical naming conventions.
-    For those files, function parses file name to look for date edited,
-    then returns the file name with the latest date.'''
-    
-    #print('Scanning: {}'.format(pathname))
-    
-    #Set up empty lists
-    files = []
-    dates = []
-    
-    for name in os.listdir(pathname):
-        subname = os.path.join(pathname, name)
-        
-        #Checks for standard naming conventions and ignores file fragments
-        if os.path.isfile(subname) and 'Fiscal Schedule' in subname and '~$' not in subname:
-            #Ignore files that end in '_(2).xlsx'
-            if (subname[(subname.find('.')-3):subname.find('.')]) == '(2)':
-                pass
-            else:
-                files.append(subname)
-                
-                #Parses file names and converts to datetimes
-                date = subname[(subname.find('.')-10):subname.find('.')]
-                date_time = datetime.strptime(date, '%m-%d-%Y').date()
-                dates.append(date_time)
-                #print('Adding: {}'.format(subname))
-    
-    #If only one file, return that one
-    if len(files) == 1:
-        return files[0]
-    
-    #If multiple files, return the one that contains the latest date
-    else:
-        latest = max(dates)
-        #print(latest.strftime('%m-%d-%Y'))
-        for file in files:
-            if str(latest.strftime('%m-%d-%Y')) in file:
-                return file
 
 def cat_sched (file):
     Summer = pd.read_excel(file, sheet_name='Summer', header=0,converters={'Cr':str, 'Term':str})
@@ -625,15 +587,12 @@ def chart_wrapper (Most_Recent_FY_Schedule, Most_Recent_Faculty, FYHistory, Most
 # output their schedule for the fiscal year given.
 '''
 
-def output_faculty_schedule (current_faculty_df, FY_df, FY_year_list=None):
+def output_faculty_schedule (output_path, current_faculty_df, FY_df, FY_year_list=None):
     '''For each faculty member in the provided current_faculty_df, function
     will collect all teaching assignments in the FY_year_list, then output
     those assignments to an excel file.
     '''
-    
-    # This is the path where all output will be saved
-    Path = 'W:\\csh\\Nursing Administration\\Faculty Data\\Faculty Workload'
-    
+
     # This is the current Date, which will be appended to the Path
     Date = datetime.now().strftime("%Y-%m-%d")
     
@@ -653,11 +612,17 @@ def output_faculty_schedule (current_faculty_df, FY_df, FY_year_list=None):
         faculty_df['Term'] = faculty_df['Term'].map(term_dict)
         
         # If path does not exist, make path
-        if not os.path.exists('{0}\\Tables\\{1}\\{2}\\'.format(Path, FY_year_list[0], Date)):
-            os.makedirs('{0}\\Tables\\{1}\\{2}\\'.format(Path, FY_year_list[0], Date))
-            
+        expected_path = os.path.abspath(os.path.join(os.sep, output_path, 'Tables', FY_year_list[0], Date))
+        if not os.path.exists(expected_path):
+            os.makedirs(expected_path)
+        '''
+        if not os.path.exists('{0}\\Tables\\{1}\\{2}\\'.format(output_path, FY_year_list[0], Date)):
+            os.makedirs('{0}\\Tables\\{1}\\{2}\\'.format(output_path, FY_year_list[0], Date))
+        '''
         # Write out to excel
-        faculty_df.to_excel('{0}\\Tables\\{1}\\{2}\\{3}.xlsx'.format(Path, FY_year_list[0], Date, faculty), sheet_name='Workload Projection')
+        full_file_name = os.path.abspath(os.path.join(os.sep, expected_path, faculty)) + '.xlsx'
+        faculty_df.to_excel(full_file_name, sheet_name='Workload Projection')
+        #        '{0}\\Tables\\{1}\\{2}\\{3}.xlsx'.format(output_path, FY_year_list[0], Date, faculty), sheet_name='Workload Projection')
 
 #############################################################
 # Main Function Call
@@ -670,8 +635,8 @@ def output_faculty_schedule (current_faculty_df, FY_df, FY_year_list=None):
 def main(fy):
     '''Main function.'''
     
-    # Path to schedules
-    sched_path = 'W:\\csh\\Nursing\\Schedules\\'
+    # Call to FileLocator class
+    FL = FileLocator()
     
     # Set as global variables (used by many charts)
     global TermDescriptions
@@ -679,7 +644,7 @@ def main(fy):
     global program_types_abbr
     
     #Read in term descriptions
-    TermDescriptions = pd.read_excel('W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx', header=0, converters={'Term':str})
+    TermDescriptions = dpu.get_term_descriptions()
     # Simplify years for easier access
     years = TermDescriptions[['Academic Year', 'Fiscal Year']]
     years.drop_duplicates(subset=['Fiscal Year'], keep='first', inplace=True)
@@ -741,9 +706,9 @@ def main(fy):
         # Create nested dictionary
         sched_dict[fy] = {}
         # Build a temporary path to the schedule
-        sched_dict[fy]['folder'] = sched_path + ay
+        sched_dict[fy]['folder'] = os.path.join(FL.schedule, ay)
         # Get the latest build of the schedule document
-        sched_dict[fy]['file_path'] = get_latest(sched_dict[fy]['folder'])
+        sched_dict[fy]['file_path'] = dpu.get_latest(sched_dict[fy]['folder'], 'Fiscal Schedule', date_format='%m-%d-%Y', ignore_suffix='(2)')
         # Get the schedule and faculty data
         sched_dict[fy]['schedule'], sched_dict[fy]['faculty'] = cat_sched(sched_dict[fy]['file_path'])
         # Increment Fiscal Year and counter
@@ -761,12 +726,12 @@ def main(fy):
     FYHistory = [sched_dict[x]['schedule'] for x in fiscal_years]
         
     #Concatenate Recent FY Data
-    FYConcat = pd.concat(FYHistory)
-        
+    FYConcat = pd.concat(FYHistory, ignore_index=True)
+
     # Output charts and faculty schedule for highest two fiscal years
     for year in fiscal_years[-2:]:
         chart_wrapper(sched_dict[year]['schedule'], sched_dict[year]['faculty'], FYHistory, sched_dict[year]['folder'])
-        output_faculty_schedule(sched_dict[year]['faculty'], FYConcat, FY_year_list=[year])
+        output_faculty_schedule(FL.faculty_workload, sched_dict[year]['faculty'], FYConcat, FY_year_list=[year])
 
 if __name__ == "__main__":
     main()
