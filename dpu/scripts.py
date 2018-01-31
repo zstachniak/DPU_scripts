@@ -52,21 +52,21 @@ def get_latest (pathname, filename, **kwargs):
             if ignore_suffix:
                 # Ignore files that end in user-identified suffix
                 if f_name.endswith(ignore_suffix):
+                    print('ignoring suffix.')
                     continue
-            else:
-                # Determine the expected string length of date
-                date_length = len(datetime.now().strftime(date_format))                    
-                # Gather expected date portion
-                date_suffix = f_name[-date_length:]
-                # Attempt to convert to datetime and add to file_dict
-                try:
-                    date_time = datetime.strptime(date_suffix, date_format).date()
-                    file_dict[date_time] = subname
-                    if verbose:
-                        print('type match.')
-                except:
-                    if verbose:
-                        print('does not meet expected date convention and has been skipped.')
+            # Determine the expected string length of date
+            date_length = len(datetime.now().strftime(date_format))                    
+            # Gather expected date portion
+            date_suffix = f_name[-date_length:]
+            # Attempt to convert to datetime and add to file_dict
+            try:
+                date_time = datetime.strptime(date_suffix, date_format).date()
+                file_dict[date_time] = subname
+                if verbose:
+                    print('type match.')
+            except:
+                if verbose:
+                    print('does not meet expected date convention and has been skipped.')
         else:
             if verbose:
                 print('does not meet file requirements')
