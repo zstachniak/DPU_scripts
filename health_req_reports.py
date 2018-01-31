@@ -8,7 +8,7 @@ Created on Thu Jan 11 09:23:14 2018
 import pandas as pd
 import numpy as np
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from fuzzywuzzy import fuzz, process
 import dpu.scripts as dpu
 from dpu.file_locator import FileLocator
@@ -28,7 +28,103 @@ def separate_cln_dupes (df, groupby='Student ID'):
     df = pd.merge(df, dupes, how='left', on=groupby, suffixes=['_1', '_2'])
     return df
 
-def clean_student_roster (current_term):
+def apply_dates_times (row, internships):
+    '''Pandas apply function that returns clinical date range and
+    time range.'''
+    # If internship
+    if row['Cr'] == '443':
+        # Gather dates from internship document
+        dates = internships[internships['Student ID'] == row['Student ID']]['Date'].item().split('-')
+        # Process and format
+        dates = [datetime.strptime(x.strip(), '%m/%d/%y') for x in dates]
+        dates = '{} - {}'.format(*map(date_format, dates))
+        times = None
+    # For all others
+    else:
+        # Gather Meeting Pattern
+        pat = row['Pat']
+        # If NSG 301
+        if row['Cr'] == '301':
+            first, last = true_date(row['Start Date'], pat, return_range=True, num_recurrence=4, skip_weeks=6)
+        else:
+            # Gather Dates
+            first, last = true_date(row['Start Date'], pat, return_range=True)
+        # Format dates
+        dates = '{} - {}'.format(*map(date_format, [first, last]))
+        # If pattern is Null (i.e., no course time or pattern)
+        if pd.isnull(pat):
+            times = None
+        else:
+            # Gather Times
+            start = datetime.time(row['Mtg Start'])
+            end = datetime.time(row['Mtg End'])
+            times = '{} {} - {}'.format(day_of_week_abbr[pat], *map(time_format, [start, end]))
+    # Return string-formated, concatenated dates and times
+    return pd.Series([dates, times])
+
+# STORAGE of days_of_week hash
+day_of_week_hash = {'MON': 0,
+                    'TUE': 1,
+                    'WED': 2,
+                    'THUR': 3,
+                    'F': 4,
+                    'SAT': 5,}
+day_of_week_abbr = {'MON': 'Mo',
+                    'TUE': 'Tu',
+                    'WED': 'We',
+                    'THUR': 'Th',
+                    'F': 'Fr',
+                    'SAT': 'Sa',}
+
+# Date and Time format lambda functions
+date_format = lambda x: datetime.strftime(x, '%m/%d/%Y')
+time_format = lambda x: time.strftime(x, '%I:%M%p')
+
+def true_date (date, pattern, date_is_max=False, **kwargs):
+    '''Function is designed to return a "true" date when user passes
+    a first possible date and a day of the week pattern. For example,
+    although 1/2/18 is the first possible meeting date, a MON pattern
+    course would not actually meet until 1/8/18. Function can work
+    backwards from a max date if user supplies that argument. In
+    addition, user can request that a range of dates be passed through
+    keyword arguments.'''
+    # Gather optional keyword arguments
+    return_range = kwargs.pop('return_range', False)
+    num_recurrence = kwargs.pop('num_recurrence', 10)
+    skip_weeks = kwargs.pop('skip_weeks', 0)
+    # Account for last day as ending week
+    num_recurrence -= 1
+    # Apply skip weeks
+    if skip_weeks:
+        date += timedelta(days=(7 * skip_weeks))
+    # Gather day of week as integer
+    day_of_week = day_of_week_hash.get(pattern, None)
+    if day_of_week is not None:
+        # Take modulus to determine offset delta
+        delta = (day_of_week - date.weekday()) % 7
+    else:
+        # If no identifiable day of the week, return date/range unchanged
+        delta = 0
+    # If the date is a max, need a negative offset delta
+    if date_is_max:
+        delta = ((delta - 7) % 7) * -1
+        if return_range:
+            num_recurrence *= -1
+    # If a range is requested
+    if return_range:
+        # Multiply delta by occurences for the range_delta
+        range_delta = delta + (num_recurrence * 7)
+        # Apply both timedeltas within a list
+        range_dates = [date + timedelta(days=x) for x in [delta, range_delta]]
+        # Sort list so that range is in proper order
+        range_dates.sort()
+        return range_dates
+    # If no range requested
+    else:
+        # Return date with timedelta applied
+        return date + timedelta(days=delta)
+
+def clean_student_roster (current_term, internships):
     '''Simple function to load and clean the student roster.'''
     # Download student rosters
     roster = dpu.get_student_roster()
@@ -44,9 +140,13 @@ def clean_student_roster (current_term):
     roster.drop_duplicates(inplace=True)
     # Sort by faculty and drop duplicates (excluding faculty)
     # Takes care of 301 issue (due to changing course times)
-    roster = roster.sort_values(by='Faculty_ID').drop_duplicates(subset=['Term', 'Student ID', 'Cr', 'Sec']).copy(deep=True)
+    roster = roster.sort_values(by=['Faculty_ID', 'Start Date']).drop_duplicates(subset=['Term', 'Student ID', 'Cr', 'Sec']).copy(deep=True)
     # Figure out next term value
     next_term = str(int(current_term) + 5)
+    # Gather string-formatted and concatenated dates and times
+    roster[['Dates', 'Times']] = roster.apply(apply_dates_times, axis=1, args=(internships,))
+    # Drop more unneeded fields
+    roster.drop(labels=['Start Date', 'End Date', 'Pat', 'Mtg Start', 'Mtg End'], axis=1, inplace=True)
     # Gather roster for next term
     roster_next_term = roster[roster['Term'] == next_term].copy(deep=True)
     roster_next_term = separate_cln_dupes(roster_next_term)
@@ -224,13 +324,18 @@ def instructor_contact_info (row, suffix, faculty, req_list, schedule):
         else:
             return pd.Series([None for x in req_list])
 
-def clinical_info (row, suffix, req_list, schedule):
+def clinical_info (row, suffix, req_list, schedule, internships):
     '''Function to return pd.Series element of requested values.'''
     # Prepare search terms
     cr_x = 'Cr' + '_' + suffix
     sec_x = 'Sec' + '_' + suffix
-    # Attempt exact ID comparison
-    res = schedule[(schedule['Cr'] == row[cr_x]) & (schedule['Sec'] == row[sec_x])]
+    
+    if row[cr_x] == '443':
+        # Attempt comparison on Emplid
+        res = internships[internships['Student ID'] == row['Emplid']]
+    else:
+        # Attempt comparison on Cr-Sec
+        res = schedule[(schedule['Cr'] == row[cr_x]) & (schedule['Sec'] == row[sec_x])]
     # If results are found, return those results
     if len(res) == 1:
         return pd.Series([res[x].item() for x in req_list])
@@ -561,26 +666,30 @@ def output_report (df, date_of_report, output_path, column_names):
     worksheet.set_column('M:M', 20)
     worksheet.set_column('N:N', 15)
     worksheet.set_column('O:O', 5)
+    # cln_1_curr
     worksheet.set_column('P:Q', 6)
-    worksheet.set_column('R:R', 20)
-    worksheet.set_column('S:S', 11)
-    worksheet.set_column('T:V', 20)
-    worksheet.set_column('W:W', 15)
-    worksheet.set_column('X:Y', 6)
-    worksheet.set_column('Z:Z', 20)
-    worksheet.set_column('AA:AA', 11)
-    worksheet.set_column('AB:AD', 20)
-    worksheet.set_column('AE:AE', 15)
-    worksheet.set_column('AF:AG', 6)
-    worksheet.set_column('AH:AH', 20)
-    worksheet.set_column('AI:AI', 11)
-    worksheet.set_column('AJ:AL', 20)
-    worksheet.set_column('AM:AM', 15)
-    worksheet.set_column('AN:AO', 6)
-    worksheet.set_column('AP:AP', 20)
-    worksheet.set_column('AQ:AQ', 11)
-    worksheet.set_column('AR:AT', 20)
-    worksheet.set_column('AU:AU', 15)
+    worksheet.set_column('R:T', 25)
+    worksheet.set_column('U:U', 11)
+    worksheet.set_column('V:W', 20)
+    worksheet.set_column('X:X', 15)
+    # cln_2_curr
+    worksheet.set_column('Y:Z', 6)
+    worksheet.set_column('AA:AC', 25)
+    worksheet.set_column('AD:AD', 11)
+    worksheet.set_column('AE:AF', 20)
+    worksheet.set_column('AG:AG', 15)
+    # cln_1_next
+    worksheet.set_column('AH:AI', 6)
+    worksheet.set_column('AJ:AL', 25)
+    worksheet.set_column('AM:AM', 11)
+    worksheet.set_column('AN:AO', 20)
+    worksheet.set_column('AP:AP', 15)
+    # cln_2_next
+    worksheet.set_column('AQ:AR', 6)
+    worksheet.set_column('AS:AU', 25)
+    worksheet.set_column('AV:AV', 11)
+    worksheet.set_column('AW:AX', 20)
+    worksheet.set_column('AY:AY', 15)
     
     # Conditional formatting
     # Add a format. Light red fill with dark red text.
@@ -627,7 +736,7 @@ def output_report (df, date_of_report, output_path, column_names):
     # Freeze panes on top row
     worksheet.freeze_panes(1, 0)
     # Apply autofilters
-    worksheet.autofilter('A1:AF{}'.format(number_rows+1))
+    worksheet.autofilter('A1:AY{}'.format(number_rows+1))
     # Wrap text formatter
     wrap_text = workbook.add_format({'text_wrap': 1, 'valign': 'top', 'bold': True, 'bottom': True})
     # Wrap text on first row
@@ -792,11 +901,24 @@ def main (prev_date):
     TermDescriptions = dpu.get_term_descriptions()
     # Get current term
     current_term = dpu.guess_current_term(TermDescriptions)
+    # Figure out next term value
+    next_term = str(int(current_term) + 5)
+    # Get internship roster
+    internships = dpu.get_cln(current_term, TermDescriptions)
+    # Try to get next term's roster, if exists
+    try:
+        cln_2 = dpu.get_cln(next_term, TermDescriptions)
+        internships = pd.concat(internships, cln_2)
+    except:
+        pass
+    # Drop all but required information
+    internships = internships[['Term', 'Cr', 'Clinical Site', 'Unit', 'Date', 'Student ID']].copy(deep=True)
+    internships = internships[internships['Cr'] == '443']
     # Get schedule
     global schedule
     schedule = dpu.get_schedule(current_term, TermDescriptions)
     # Get clinical roster
-    roster = clean_student_roster(current_term)
+    roster = clean_student_roster(current_term, internships)
     # Merge with student data
     roster = pd.merge(roster, students[['Emplid', 'Last Name', 'First Name', 'Maj Desc', 'Campus', 'Email', 'Best Phone']], how='left', on='Emplid')
     # Combine with faculty data
@@ -816,13 +938,13 @@ def main (prev_date):
     roster.drop(labels=id_fields, axis=1, inplace=True)
     # Combine with schedule data
     # List of the required columns
-    req_list = ['Clinical Site', 'Unit', 'Time']
+    req_list = ['Clinical Site', 'Unit']
     # Iterate through suffixes
     for suffix in name_con:
         # Create new column names
         new_cols = [x + '_' + suffix for x in req_list]
         # Apply search function
-        roster[new_cols] = roster.apply(clinical_info, axis=1, args=(suffix, req_list, schedule))
+        roster[new_cols] = roster.apply(clinical_info, axis=1, args=(suffix, req_list, schedule, internships))
     # Gather historical student data
     historical_students = get_historical_student_data(FL.hist_students, students)
     
@@ -876,8 +998,8 @@ def main (prev_date):
     faculty_roster[fields] = faculty_roster.apply(determine_status, axis=1, args=(cb_to_fac, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, faculty_trackers, student_trackers, next_action_date), account='faculty')
     
     # Revise order of columns
-    cols = roster.columns.tolist()
-    new_order = cols[6:7] + cols[11:12] + cols[42:47] + cols[0:1] + cols[12:18] + cols[1:4] + cols[30:33] + cols[18:21] + cols[4:6] + cols[33:36] + cols[21:24] + cols[7:9] + cols[36:39] + cols[24:27] + cols[9:11] + cols[39:42] + cols[27:30]
+    cols = roster.columns.tolist()  
+    new_order = cols[10:11] + cols[19:20] + cols[46:51] + cols[0:1] + cols[20:26] + cols[1:6] + cols[38:40] + cols[26:29] + cols[6:10] + cols[40:42] + cols[29:32] + cols[11:15] + cols[42:44] + cols[32:35] + cols[15:19] + cols[44:46] + cols[35:38]
     roster = roster[new_order]
     # Revise order for faculty
     cols = faculty_roster.columns.tolist()    
