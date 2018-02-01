@@ -43,12 +43,14 @@ def apply_dates_times (row, internships, roster_type='student'):
     else:
         # Gather Meeting Pattern
         pat = row['Pat']
+        # Convert pattern to day of week integer
+        day_of_week = day_of_week_hash.get(pat, None)
         # If NSG 301
         if row['Cr'] == '301':
-            first, last = true_date(row['Start Date'], pat, return_range=True, num_recurrence=4, skip_weeks=6)
+            first, last = dpu.true_date(row['Start Date'], day_of_week, return_range=True, num_recurrence=4, skip_weeks=6)
         else:
             # Gather Dates
-            first, last = true_date(row['Start Date'], pat, return_range=True)
+            first, last = dpu.true_date(row['Start Date'], day_of_week, return_range=True)
         # Format dates
         dates = '{} - {}'.format(*map(date_format, [first, last]))
         # If pattern is Null (i.e., no course time or pattern)
@@ -79,50 +81,6 @@ day_of_week_abbr = {'MON': 'Mo',
 # Date and Time format lambda functions
 date_format = lambda x: datetime.strftime(x, '%m/%d/%Y')
 time_format = lambda x: time.strftime(x, '%I:%M%p')
-
-def true_date (date, pattern, date_is_max=False, **kwargs):
-    '''Function is designed to return a "true" date when user passes
-    a first possible date and a day of the week pattern. For example,
-    although 1/2/18 is the first possible meeting date, a MON pattern
-    course would not actually meet until 1/8/18. Function can work
-    backwards from a max date if user supplies that argument. In
-    addition, user can request that a range of dates be passed through
-    keyword arguments.'''
-    # Gather optional keyword arguments
-    return_range = kwargs.pop('return_range', False)
-    num_recurrence = kwargs.pop('num_recurrence', 10)
-    skip_weeks = kwargs.pop('skip_weeks', 0)
-    # Account for last day as ending week
-    num_recurrence -= 1
-    # Apply skip weeks
-    if skip_weeks:
-        date += timedelta(days=(7 * skip_weeks))
-    # Gather day of week as integer
-    day_of_week = day_of_week_hash.get(pattern, None)
-    if day_of_week is not None:
-        # Take modulus to determine offset delta
-        delta = (day_of_week - date.weekday()) % 7
-    else:
-        # If no identifiable day of the week, return date/range unchanged
-        delta = 0
-    # If the date is a max, need a negative offset delta
-    if date_is_max:
-        delta = ((delta - 7) % 7) * -1
-        if return_range:
-            num_recurrence *= -1
-    # If a range is requested
-    if return_range:
-        # Multiply delta by occurences for the range_delta
-        range_delta = delta + (num_recurrence * 7)
-        # Apply both timedeltas within a list
-        range_dates = [date + timedelta(days=x) for x in [delta, range_delta]]
-        # Sort list so that range is in proper order
-        range_dates.sort()
-        return range_dates
-    # If no range requested
-    else:
-        # Return date with timedelta applied
-        return date + timedelta(days=delta)
 
 def clean_student_roster (current_term, internships):
     '''Simple function to load and clean the student roster.'''
@@ -616,31 +574,6 @@ def determine_status (row, id_dict, noncompliant_df, compliant_df, noncompliant_
         if len(result) != 0:
             return result
 
-def archive_old_reports (report_path, report_basename, archive_folder):
-    '''Function to move all old reports into an archive folder.'''
-    # Gather all files that match basename within the path
-    all_files = dpu.get_latest(report_path, report_basename, num_files=float('inf'))
-    # If no old reports are found, exit function
-    if not all_files:
-        return
-    # If a single file, coerce to list
-    if type(all_files) == str:
-        all_files = [all_files]
-    # Test if destination exists; if not, make folder
-    destination = os.path.join(report_path, archive_folder)
-    if not os.path.isdir(destination):
-        os.makedirs(destination)
-    # Iterate through all old reports
-    for old_path in all_files:
-        # Create new path name
-        file_name = os.path.basename(old_path)
-        new_path = os.path.join(destination, file_name)
-        # If new path already exists, delete it
-        if os.path.exists(new_path):
-            os.remove(new_path)
-        # Rename (i.e., move) old reports
-        os.rename(old_path, new_path)
-
 def output_report (df, column_names, file_name, date_of_report, output_path):
     '''Function that primarily applies formatting to excel report.'''
     # Re-order columns
@@ -660,7 +593,7 @@ def output_report (df, column_names, file_name, date_of_report, output_path):
     worksheet.set_zoom(90)
     # Set column sizes
     for i, col in enumerate(column_names):
-        c = char_counter_from_int(i)
+        c = dpu.char_counter_from_int(i)
         worksheet.set_column('{0}:{1}'.format(c, c), col[1])
     # Conditional formatting
     # Add a format. Light red fill with dark red text.
@@ -707,7 +640,7 @@ def output_report (df, column_names, file_name, date_of_report, output_path):
     # Freeze panes on top row
     worksheet.freeze_panes(1, 0)
     # Apply autofilters
-    worksheet.autofilter('A1:{0}{1}'.format(char_counter_from_int(len(column_names)), number_rows+1))
+    worksheet.autofilter('A1:{0}{1}'.format(dpu.char_counter_from_int(len(column_names)), number_rows+1))
     # Wrap text formatter
     wrap_text = workbook.add_format({'text_wrap': 1, 'valign': 'top', 'bold': True, 'bottom': True})
     # Wrap text on first row
@@ -715,48 +648,6 @@ def output_report (df, column_names, file_name, date_of_report, output_path):
         worksheet.write(0, i, col[0], wrap_text)
     # Apply changes
     writer.save()
-
-def recursive_char (i, **kwargs):
-    '''A function that takes an integer value and returns a character
-    representation. Starts with 0-26 represented by A-Z. At 27, will
-    become AA, then AB, etc. Implements recursion to allow for any
-    length of integer.'''
-    upper = kwargs.get('upper', True)
-    if upper:
-        char_offset = ord('A')
-    else:
-        char_offset = ord('a')
-    # Initialize list for sequential storage
-    int_list = []
-    # Take floor of integer
-    floor = i // 26
-    # Base case: floor == 0
-    if floor == 0:
-        # Append int with the char_offset
-        int_list.append((i % 26) + char_offset)
-    # Recursive case
-    else:
-        # Append first digit with char_offset
-        # We subtract 1 due to indexing
-        int_list.append((i // 26) + char_offset - 1)
-        # Subtract out first digit
-        i -= (floor * 26)
-        # Recursive step
-        int_list += recursive_char(i, **kwargs)
-    return int_list
-
-def char_counter_from_int (i, **kwargs):
-    '''A function that takes an integer value and returns a character
-    representation. Starts with 0-26 represented by A-Z. At 27, will
-    become AA, then AB, etc. Implements recursion to allow for any
-    length of integer.
-    
-    Optional Keyword Arguments:
-    upper: True will return uppercase, False lowercase (default:True)
-    '''
-    int_list = recursive_char(i, **kwargs)
-    char_list = [chr(x) for x in int_list]
-    return ''.join(char_list)
 
 def prepare_columns (prev_date):
     tru_order = [('Cln This Term?', 8),
@@ -986,27 +877,24 @@ def main (prev_date):
     # New column names
     fields = ['Changed Since ' + prev_date, 'Compliant', 'Requirements Incomplete', 'Next Due', 'Next Due Date']
     # Gather compliance status
-    #roster[fields] = roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date))
     roster[fields] = roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date), account='student')
     # Gather compliance status
     faculty_roster[fields] = faculty_roster.apply(determine_status, axis=1, args=(cb_to_fac, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, faculty_trackers, student_trackers, next_action_date), account='faculty')
     
+    # Archive old reports that were created by this script
+    for cr_report in ['student_report', 'faculty_report']:        
+        dpu.archive_old_reports(FL.health_req_report, cr_report, 'Archived')
+    # Archive old reports downloaded from Castle Branch
+    for dl_report in ['Compliant', 'Noncompliant', 'Next_Action_Date']:
+        dpu.archive_old_reports(FL.health_req_cb_downloads, dl_report, 'Archive', keep_min=3)
+    
     # Gather column names
-    
     faculty_cols, student_cols = prepare_columns (prev_date)
-    
-    # Archive old reports
-    archive_old_reports(FL.health_req_report, 'student_report', 'Archived Student Reports')
-    archive_old_reports(FL.health_req_report, 'faculty_report', 'Archived Faculty Reports')
-    
     # Output to file
     date_of_current = noncompliant_files[0].rstrip('.csv')[-10:]
     date_of_current = datetime.strptime(date_of_current, '%Y-%m-%d')
     output_report (roster, student_cols, 'student_report', date_of_current, FL.health_req_report)
     output_report (faculty_roster, faculty_cols, 'faculty_report', date_of_current, FL.health_req_report)
-    
-    #output_report(roster, date_of_current, FL.health_req_report, student_cols)
-    #output_fac_report(faculty_roster, date_of_current, FL.health_req_report, faculty_cols)
 
 if __name__ == "__main__":
     main()
