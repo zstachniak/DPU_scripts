@@ -28,11 +28,11 @@ def separate_cln_dupes (df, groupby='Student ID'):
     df = pd.merge(df, dupes, how='left', on=groupby, suffixes=['_1', '_2'])
     return df
 
-def apply_dates_times (row, internships):
+def apply_dates_times (row, internships, roster_type='student'):
     '''Pandas apply function that returns clinical date range and
     time range.'''
     # If internship
-    if row['Cr'] == '443':
+    if row['Cr'] == '443' and roster_type == 'student':
         # Gather dates from internship document
         dates = internships[internships['Student ID'] == row['Student ID']]['Date'].item().split('-')
         # Process and format
@@ -52,7 +52,7 @@ def apply_dates_times (row, internships):
         # Format dates
         dates = '{} - {}'.format(*map(date_format, [first, last]))
         # If pattern is Null (i.e., no course time or pattern)
-        if pd.isnull(pat):
+        if pd.isnull(pat) or pat == 'BYAR':
             times = None
         else:
             # Gather Times
@@ -231,6 +231,10 @@ def clean_faculty_roster (current_term):
     #
     # Figure out next term value
     next_term = str(int(current_term) + 5)
+    # Gather string-formatted and concatenated dates and times
+    #roster[['Dates', 'Times']] = roster.apply(apply_dates_times, axis=1, args=(internships,), roster_type='faculty')
+    # Drop more unneeded fields
+    roster.drop(labels=['Start Date', 'End Date', 'Pat', 'Mtg Start', 'Mtg End'], axis=1, inplace=True)
     # Gather roster for next term
     roster_next_term = roster[roster['Term'] == next_term].copy(deep=True)
     # Drop next term from current roster
@@ -637,10 +641,13 @@ def archive_old_reports (report_path, report_basename, archive_folder):
         # Rename (i.e., move) old reports
         os.rename(old_path, new_path)
 
-def output_report (df, date_of_report, output_path, column_names):
+def output_report (df, column_names, file_name, date_of_report, output_path):
     '''Function that primarily applies formatting to excel report.'''
+    # Re-order columns
+    new_order = [col[0] for col in column_names]
+    df = df[new_order]
     # File name
-    f_name = 'student_report_' + date_of_report.strftime('%Y-%m-%d') + '.xlsx'
+    f_name = file_name + '_' + date_of_report.strftime('%Y-%m-%d') + '.xlsx'
     f_name = os.path.join(output_path, f_name)
     # Initialize a writer
     writer = pd.ExcelWriter(f_name, engine='xlsxwriter')
@@ -651,46 +658,10 @@ def output_report (df, date_of_report, output_path, column_names):
     worksheet = writer.sheets['report']
     # Set zoom
     worksheet.set_zoom(90)
-    
     # Set column sizes
-    worksheet.set_column('A:B', 8)
-    worksheet.set_column('C:C', 15)
-    worksheet.set_column('D:D', 10)
-    worksheet.set_column('E:F', 20)
-    worksheet.set_column('G:G', 15)
-    worksheet.set_column('H:H', 10)
-    worksheet.set_column('I:I', 15)
-    worksheet.set_column('J:J', 10)
-    worksheet.set_column('K:K', 15)
-    worksheet.set_column('L:L', 8)
-    worksheet.set_column('M:M', 20)
-    worksheet.set_column('N:N', 15)
-    worksheet.set_column('O:O', 5)
-    # cln_1_curr
-    worksheet.set_column('P:Q', 6)
-    worksheet.set_column('R:T', 25)
-    worksheet.set_column('U:U', 11)
-    worksheet.set_column('V:W', 20)
-    worksheet.set_column('X:X', 15)
-    # cln_2_curr
-    worksheet.set_column('Y:Z', 6)
-    worksheet.set_column('AA:AC', 25)
-    worksheet.set_column('AD:AD', 11)
-    worksheet.set_column('AE:AF', 20)
-    worksheet.set_column('AG:AG', 15)
-    # cln_1_next
-    worksheet.set_column('AH:AI', 6)
-    worksheet.set_column('AJ:AL', 25)
-    worksheet.set_column('AM:AM', 11)
-    worksheet.set_column('AN:AO', 20)
-    worksheet.set_column('AP:AP', 15)
-    # cln_2_next
-    worksheet.set_column('AQ:AR', 6)
-    worksheet.set_column('AS:AU', 25)
-    worksheet.set_column('AV:AV', 11)
-    worksheet.set_column('AW:AX', 20)
-    worksheet.set_column('AY:AY', 15)
-    
+    for i, col in enumerate(column_names):
+        c = char_counter_from_int(i)
+        worksheet.set_column('{0}:{1}'.format(c, c), col[1])
     # Conditional formatting
     # Add a format. Light red fill with dark red text.
     red = workbook.add_format({'bg_color': '#FFC7CE',
@@ -736,100 +707,121 @@ def output_report (df, date_of_report, output_path, column_names):
     # Freeze panes on top row
     worksheet.freeze_panes(1, 0)
     # Apply autofilters
-    worksheet.autofilter('A1:AY{}'.format(number_rows+1))
+    worksheet.autofilter('A1:{0}{1}'.format(char_counter_from_int(len(column_names)), number_rows+1))
     # Wrap text formatter
     wrap_text = workbook.add_format({'text_wrap': 1, 'valign': 'top', 'bold': True, 'bottom': True})
     # Wrap text on first row
     for i, col in enumerate(column_names):
-        worksheet.write(0, i, col, wrap_text)
+        worksheet.write(0, i, col[0], wrap_text)
     # Apply changes
     writer.save()
 
-def output_fac_report (df, date_of_report, output_path, column_names):
-    '''Function that primarily applies formatting to excel report.'''
-    # File name
-    f_name = 'faculty_report_' + date_of_report.strftime('%Y-%m-%d') + '.xlsx'
-    f_name = os.path.join(output_path, f_name)
-    # Initialize a writer
-    writer = pd.ExcelWriter(f_name, engine='xlsxwriter')
-    # Write data
-    df.to_excel(writer, index=False, sheet_name='report')
-    # Access the worksheet
-    workbook = writer.book
-    worksheet = writer.sheets['report']
-    # Set zoom
-    worksheet.set_zoom(90)
+def recursive_char (i, **kwargs):
+    '''A function that takes an integer value and returns a character
+    representation. Starts with 0-26 represented by A-Z. At 27, will
+    become AA, then AB, etc. Implements recursion to allow for any
+    length of integer.'''
+    upper = kwargs.get('upper', True)
+    if upper:
+        char_offset = ord('A')
+    else:
+        char_offset = ord('a')
+    # Initialize list for sequential storage
+    int_list = []
+    # Take floor of integer
+    floor = i // 26
+    # Base case: floor == 0
+    if floor == 0:
+        # Append int with the char_offset
+        int_list.append((i % 26) + char_offset)
+    # Recursive case
+    else:
+        # Append first digit with char_offset
+        # We subtract 1 due to indexing
+        int_list.append((i // 26) + char_offset - 1)
+        # Subtract out first digit
+        i -= (floor * 26)
+        # Recursive step
+        int_list += recursive_char(i, **kwargs)
+    return int_list
+
+def char_counter_from_int (i, **kwargs):
+    '''A function that takes an integer value and returns a character
+    representation. Starts with 0-26 represented by A-Z. At 27, will
+    become AA, then AB, etc. Implements recursion to allow for any
+    length of integer.
     
-    # Set column sizes
-    worksheet.set_column('A:B', 8)
-    worksheet.set_column('C:C', 15)
-    worksheet.set_column('D:D', 10)
-    worksheet.set_column('E:F', 20)
-    worksheet.set_column('G:G', 15)
-    worksheet.set_column('H:H', 10)
-    worksheet.set_column('I:I', 15)
-    worksheet.set_column('J:J', 10)
-    worksheet.set_column('K:L', 20)
-    worksheet.set_column('M:M', 15)
-    worksheet.set_column('M:M', 20)
-    worksheet.set_column('N:N', 20)
-    worksheet.set_column('O:O', 40)
-    worksheet.set_column('P:P', 20)
-    worksheet.set_column('Q:Q', 40)
-    
-    # Conditional formatting
-    # Add a format. Light red fill with dark red text.
-    red = workbook.add_format({'bg_color': '#FFC7CE',
-                                   'font_color': '#9C0006'})
-    # Add a format. Green fill with dark green text.
-    green = workbook.add_format({'bg_color': '#C6EFCE',
-                                   'font_color': '#006100'})
-    # Add a format. Yellow fill with black text.
-    yellow = workbook.add_format({'bg_color': '#FFFF99',
-                                   'font_color': '#000000',
-                                   'num_format': 'mm/dd/yyyy'})
-    # Add a format. Date
-    date_format = workbook.add_format({'num_format': 'mm/dd/yyyy'})
-    
-    # Define our range for the color formatting
-    number_rows = len(df.index)
-    compliant_range = "D2:D{}".format(number_rows+1)
-    changes_range = "C2:C{}".format(number_rows+1)
-    nextdue_range = "G2:G{}".format(number_rows+1)
-    
-    # Highlight Noncompliant in Red
-    worksheet.conditional_format(compliant_range, {'type': 'cell',
-                                                   'criteria': 'equal to',
-                                                   'value': '"No"',
-                                                   'format': red})
-    # Highlight changes in Green
-    worksheet.conditional_format(changes_range, {'type': 'cell',
-                                                   'criteria': 'equal to',
-                                                   'value': 'TRUE',
-                                                   'format': green})
-    # Highlight next due in Yellow
-    worksheet.conditional_format(nextdue_range, {'type': 'date',
-                                                   'criteria': 'between',
-                                                   'minimum': date_of_report,
-                                                   'maximum': date_of_report + timedelta(days=60),
-                                                   'format': yellow})
-    # Format date for rest of column
-    worksheet.conditional_format(nextdue_range, {'type': 'date',
-                                                   'criteria': 'greater than',
-                                                   'value': date_of_report + timedelta(days=60),
-                                                   'format': date_format})
-    
-    # Freeze panes on top row
-    worksheet.freeze_panes(1, 0)
-    # Apply autofilters
-    worksheet.autofilter('A1:Q{}'.format(number_rows+1))
-    # Wrap text formatter
-    wrap_text = workbook.add_format({'text_wrap': 1, 'valign': 'top', 'bold': True, 'bottom': True})
-    # Wrap text on first row
-    for i, col in enumerate(column_names):
-        worksheet.write(0, i, col, wrap_text)
-    # Apply changes
-    writer.save()
+    Optional Keyword Arguments:
+    upper: True will return uppercase, False lowercase (default:True)
+    '''
+    int_list = recursive_char(i, **kwargs)
+    char_list = [chr(x) for x in int_list]
+    return ''.join(char_list)
+
+def prepare_columns (prev_date):
+    tru_order = [('Cln This Term?', 8),
+                 ('Cln Next Term?', 8),
+                 ('Changed Since {}'.format(prev_date), 15),
+                 ('Compliant', 10),
+                 ('Requirements Incomplete', 20),
+                 ('Next Due', 20),
+                 ('Next Due Date', 15),
+                 ('Emplid', 10),
+                 ('Last Name', 15),
+                 ('First Name', 10),]
+    fac_order = [('Primary Email', 20),
+                 ('Secondary Email', 20),
+                 ('Cell Phone', 20),
+                 ('Courses_curr', 20),
+                 ('Cln Sites_curr', 40),
+                 ('Courses_next', 20),
+                 ('Cln Sites_next', 40),]
+    stu_order = [('Maj Desc', 15),
+                 ('Campus', 8),
+                 ('Email', 20),
+                 ('Best Phone', 15),
+                 ('Term', 5),
+                 ('Cr_1_curr', 6),
+                 ('Sec_1_curr', 6),
+                 ('Dates_1_curr', 25),
+                 ('Times_1_curr', 25),
+                 ('Clinical Site_1_curr', 25),
+                 ('Unit_1_curr', 11),
+                 ('Instructor_1_curr Last-First', 20),
+                 ('Instructor_1_curr Primary Email', 20),
+                 ('Instructor_1_curr Secondary Email', 20),
+                 ('Instructor_1_curr Cell Phone', 15),
+                 ('Cr_2_curr', 6),
+                 ('Sec_2_curr', 6),
+                 ('Dates_2_curr', 25),
+                 ('Times_2_curr', 25),
+                 ('Clinical Site_2_curr', 25),
+                 ('Unit_2_curr', 11),
+                 ('Instructor_2_curr Last-First', 20),
+                 ('Instructor_2_curr Primary Email', 20),
+                 ('Instructor_2_curr Secondary Email', 20),
+                 ('Instructor_2_curr Cell Phone', 15),
+                 ('Cr_1_next', 6),
+                 ('Sec_1_next', 6),
+                 ('Dates_1_next', 25),
+                 ('Times_1_next', 25),
+                 ('Clinical Site_1_next', 25),
+                 ('Unit_1_next', 11),
+                 ('Instructor_1_next Last-First', 20),
+                 ('Instructor_1_next Primary Email', 20),
+                 ('Instructor_1_next Secondary Email', 20),
+                 ('Instructor_1_next Cell Phone', 15),
+                 ('Cr_2_next', 6),
+                 ('Sec_2_next', 6),
+                 ('Dates_2_next', 25),
+                 ('Times_2_next', 25),
+                 ('Clinical Site_2_next', 25),
+                 ('Unit_2_next', 11),
+                 ('Instructor_2_next Last-First', 20),
+                 ('Instructor_2_next Primary Email', 20),
+                 ('Instructor_2_next Secondary Email', 20),
+                 ('Instructor_2_next Cell Phone', 15),]
+    return (tru_order + fac_order), (tru_order + stu_order)
 
 @click.command()
 @click.option(
@@ -870,6 +862,8 @@ def main (prev_date):
         compliant_files = [compliant_files, cc_prev]
         if noncompliant_files[0] == noncompliant_files[1] or compliant_files[0] == compliant_files[1]:
             raise 'Previous date provided is same as date of most recent compliance files. Download more recent reports and try again.'
+    else:
+        prev_date = noncompliant_files[1].rstrip('.csv')[-10:]
     
     # Get the two most recent reports
     noncompliant_curr = read_cb(noncompliant_files[0])
@@ -923,7 +917,7 @@ def main (prev_date):
     roster = pd.merge(roster, students[['Emplid', 'Last Name', 'First Name', 'Maj Desc', 'Campus', 'Email', 'Best Phone']], how='left', on='Emplid')
     # Combine with faculty data
     # List of the required columns
-    req_list = ['Primary Email', 'Secondary Email', 'Cell Phone']
+    req_list = ['Last-First', 'Primary Email', 'Secondary Email', 'Cell Phone']
     # Naming convention for suffixes
     name_con = ['1_curr', '2_curr', '1_next', '2_next']
     # Iterate through suffixes (i.e., through instructors)
@@ -990,21 +984,16 @@ def main (prev_date):
     faculty_roster.apply(match_faculty, axis=1, args=(compliant_curr[compliant_curr['To-Do List Name'].isin(student_trackers)], cb_to_fac));
     
     # New column names
-    fields = ['Changed Since ' + noncompliant_files[1].rstrip('.csv')[-10:], 'Compliant', 'Requirements Incomplete', 'Next Due', 'Next Due Date']
+    fields = ['Changed Since ' + prev_date, 'Compliant', 'Requirements Incomplete', 'Next Due', 'Next Due Date']
     # Gather compliance status
     #roster[fields] = roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date))
     roster[fields] = roster.apply(determine_status, axis=1, args=(cb_to_dpu, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, student_trackers, dna_trackers, next_action_date), account='student')
     # Gather compliance status
     faculty_roster[fields] = faculty_roster.apply(determine_status, axis=1, args=(cb_to_fac, noncompliant_curr, compliant_curr, noncompliant_changelog, compliant_changelog, faculty_trackers, student_trackers, next_action_date), account='faculty')
     
-    # Revise order of columns
-    cols = roster.columns.tolist()  
-    new_order = cols[10:11] + cols[19:20] + cols[46:51] + cols[0:1] + cols[20:26] + cols[1:6] + cols[38:40] + cols[26:29] + cols[6:10] + cols[40:42] + cols[29:32] + cols[11:15] + cols[42:44] + cols[32:35] + cols[15:19] + cols[44:46] + cols[35:38]
-    roster = roster[new_order]
-    # Revise order for faculty
-    cols = faculty_roster.columns.tolist()    
-    new_order = cols[1:2] + cols[4:5] + cols[14:19] + cols[0:1] + cols[12:14] + cols[9:12] + cols[2:4] + cols[5:7]
-    faculty_roster = faculty_roster[new_order]
+    # Gather column names
+    
+    faculty_cols, student_cols = prepare_columns (prev_date)
     
     # Archive old reports
     archive_old_reports(FL.health_req_report, 'student_report', 'Archived Student Reports')
@@ -1013,8 +1002,11 @@ def main (prev_date):
     # Output to file
     date_of_current = noncompliant_files[0].rstrip('.csv')[-10:]
     date_of_current = datetime.strptime(date_of_current, '%Y-%m-%d')
-    output_report(roster, date_of_current, FL.health_req_report, roster.columns)
-    output_fac_report(faculty_roster, date_of_current, FL.health_req_report, faculty_roster.columns)
+    output_report (roster, student_cols, 'student_report', date_of_current, FL.health_req_report)
+    output_report (faculty_roster, faculty_cols, 'faculty_report', date_of_current, FL.health_req_report)
+    
+    #output_report(roster, date_of_current, FL.health_req_report, student_cols)
+    #output_fac_report(faculty_roster, date_of_current, FL.health_req_report, faculty_cols)
 
 if __name__ == "__main__":
     main()
