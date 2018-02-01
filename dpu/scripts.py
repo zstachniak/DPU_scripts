@@ -7,7 +7,7 @@ Created on Fri Jan 12 15:16:16 2018
 
 import os
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from fuzzywuzzy import fuzz, process
 from dpu.file_locator import FileLocator
 FL = FileLocator()
@@ -238,3 +238,114 @@ def build_File (pathname, tempdict, file_format='csv'):
         else:
             pass
     return tempdict
+
+def archive_old_reports (report_fullpath, report_basename, archive_folder_name, **kwargs):
+    '''Function to move all old reports in a folder into a separate
+    archive folder.'''
+    keep_min = kwargs.pop('keep_min', 0)
+    # Gather all files that match basename within the path
+    all_files = get_latest(report_fullpath, report_basename, num_files=float('inf'))
+    # If no old reports are found, exit function
+    if not all_files:
+        return
+    # If a single file, coerce to list
+    if type(all_files) == str:
+        all_files = [all_files]
+    # Test if destination exists; if not, make folder
+    destination = os.path.join(report_fullpath, archive_folder_name)
+    if not os.path.isdir(destination):
+        os.makedirs(destination)
+    # While there remain more than keep_min number of reports
+    while len(all_files) > keep_min:
+        # Pop oldest first
+        old_path = all_files.pop()
+        # Create new path name
+        file_name = os.path.basename(old_path)
+        new_path = os.path.join(destination, file_name)
+        # If new path already exists, delete it
+        if os.path.exists(new_path):
+            os.remove(new_path)
+        # Rename (i.e., move) old reports
+        os.rename(old_path, new_path)
+
+def recursive_char (i, **kwargs):
+    '''A function that takes an integer value and returns a list of 
+    integers representing a letter character in unicode.'''
+    upper = kwargs.get('upper', True)
+    if upper:
+        char_offset = ord('A')
+    else:
+        char_offset = ord('a')
+    # Initialize list for sequential storage
+    int_list = []
+    # Take floor of integer
+    floor = i // 26
+    # Base case: floor == 0
+    if floor == 0:
+        # Append int with the char_offset
+        int_list.append((i % 26) + char_offset)
+    # Recursive case
+    else:
+        # Append first digit with char_offset
+        # We subtract 1 due to indexing
+        int_list.append((i // 26) + char_offset - 1)
+        # Subtract out first digit
+        i -= (floor * 26)
+        # Recursive step
+        int_list += recursive_char(i, **kwargs)
+    return int_list
+
+def char_counter_from_int (i, **kwargs):
+    '''Wrapper function around recursive char that takes an integer 
+    value and returns a character representation. Starts with 0 
+    represented by A. At 27, will become AA, then AB, etc. Implements
+    recursion to allow for any length of integer.
+    
+    Optional Keyword Arguments:
+    upper: True will return uppercase, False lowercase (default:True)
+    '''
+    int_list = recursive_char(i, **kwargs)
+    char_list = [chr(x) for x in int_list]
+    return ''.join(char_list)
+
+def true_date (date, day_of_week, date_is_max=False, **kwargs):
+    '''Function is designed to return a "true" date when user passes
+    a first possible date and a day of the week pattern. For example,
+    although 1/2/18 is the first possible meeting date, a Monday pattern
+    course represented by the user as "0" would not actually meet until
+    1/8/18. Function can work backwards from a max date if user supplies 
+    that argument. In addition, user can request that a range of dates be
+    passed through keyword arguments.'''
+    # Gather optional keyword arguments
+    return_range = kwargs.pop('return_range', False)
+    num_recurrence = kwargs.pop('num_recurrence', 10)
+    skip_weeks = kwargs.pop('skip_weeks', 0)
+    # Account for last day as ending week
+    num_recurrence -= 1
+    # Apply skip weeks
+    if skip_weeks:
+        date += timedelta(days=(7 * skip_weeks))
+    if day_of_week is not None:
+        # Take modulus to determine offset delta
+        delta = (day_of_week - date.weekday()) % 7
+    else:
+        # If no identifiable day of the week, return date/range unchanged
+        delta = 0
+    # If the date is a max, need a negative offset delta
+    if date_is_max:
+        delta = ((delta - 7) % 7) * -1
+        if return_range:
+            num_recurrence *= -1
+    # If a range is requested
+    if return_range:
+        # Multiply delta by occurences for the range_delta
+        range_delta = delta + (num_recurrence * 7)
+        # Apply both timedeltas within a list
+        range_dates = [date + timedelta(days=x) for x in [delta, range_delta]]
+        # Sort list so that range is in proper order
+        range_dates.sort()
+        return range_dates
+    # If no range requested
+    else:
+        # Return date with timedelta applied
+        return date + timedelta(days=delta)
