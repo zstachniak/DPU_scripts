@@ -131,7 +131,7 @@ def guess_current_term (TermDescriptions):
     term = TermDescriptions[(TermDescriptions['Academic Year'] == ay) & (TermDescriptions['Quarter'] == quarter)]['Term'].item()
     return term
 
-def get_cln (term, TermDescriptions):
+def get_cln (term, TermDescriptions, return_location=False):
     '''A function to gather clinical rosters from path & term.'''
     # Starting Path
     starting_path = FL.cln_roster
@@ -142,8 +142,11 @@ def get_cln (term, TermDescriptions):
     folder = os.path.join(starting_path, ay, q)
     file = get_latest(folder, 'Clinical Roster')
     # Read data
-    clinical_roster = pd.read_excel(file, header=0, converters={'Term':str, 'Cr':str, 'Student ID':str})
-    return clinical_roster
+    clinical_roster = pd.read_excel(file, header=0, converters={'Term':str, 'Cr':str, 'Student ID':str, 'Hours':str})
+    if return_location:
+        return clinical_roster, file
+    else:
+        return clinical_roster
 
 def get_dir_of_schedule (term, TermDescriptions):
     '''A function to output a full directory path to a schedule.'''
