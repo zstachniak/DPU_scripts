@@ -7,6 +7,7 @@ Created on Fri Jan 12 15:16:16 2018
 
 import os
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 from fuzzywuzzy import fuzz, process
 from dpu.file_locator import FileLocator
@@ -188,6 +189,49 @@ def get_student_roster ():
     rosters['Catalog'] = rosters['Catalog'].apply(lambda x: x.strip())
     rosters.rename(columns={'Catalog':'Cr', 'Section':'Sec'}, inplace=True)
     return rosters
+
+def get_employee_list ():
+    '''Simple function to load employee_list'''
+    starting_path = FL.faculty
+    file = os.path.abspath(os.path.join(os.sep, starting_path, 'Employee List')) + '.xlsx'
+    emp = pd.read_excel(file, header=0, converters={'Empl ID': str})
+    return emp
+
+def get_faculty_emails (term, **kwargs):
+    '''docstring'''
+    course = kwargs.pop('course', None)
+    course_type = kwargs.pop('course_type', None)
+    program = kwargs.pop('program', None)
+    faculty_track = kwargs.pop('faculty_track', None)
+    email_type = kwargs.pop('email_type', None)
+    # Gather schedule
+    sched = get_schedule(term, get_term_descriptions())
+    # filter out based on course, type, and program list
+    if course:
+        sched = sched[sched['Cr'] == course]
+    if course_type:
+        sched = sched[sched['Type'] == course_type]
+    if program:
+        sched = sched[sched['Program'] == program]
+    # Gather unique faculty names from schedule
+    faculty = sched['Faculty'].unique().tolist()
+    # Gather employee list
+    employee_list = get_employee_list ()
+    # Filter out based on faculty track
+    if faculty_track:
+        employee_list = employee_list[employee_list['Track'] == faculty_track]
+    if email_type:
+        emails = np.array(employee_list[(employee_list['Last-First'].isin(faculty)) & (~pd.isnull(employee_list[email_type]))][email_type].tolist())
+    else:
+        # Initialize array of emails
+        emails = np.array([])
+        for email_type in ['Primary Email', 'Secondary Email']:
+            # Gather and append additional emails
+            add_emails = employee_list[(employee_list['Last-First'].isin(faculty)) & (~pd.isnull(employee_list[email_type]))][email_type].tolist()
+            emails = np.append(emails, add_emails)
+    # Drop NaNs and duplicates
+    emails = np.unique(emails[~pd.isnull(emails)])
+    return emails
 
 def find_best_string_match (query, choices, **kwargs):
     '''This function takes a single query and a list of possible
@@ -387,6 +431,12 @@ def ensure_empty_dir (folder_path):
             empty_dir(folder_path)
     # Make directory if doesn't exist
     else:
+        os.mkdir(folder_path)
+
+def ensure_dir (folder_path):
+    '''Wrapper function to ensure that a directory exists.'''
+    # Check if staging dir exists
+    if not os.path.isdir(folder_path):
         os.mkdir(folder_path)
 
 def merge_PDFs (files, output_path):
