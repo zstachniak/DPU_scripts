@@ -6,6 +6,7 @@ Created on Tue Feb  7 11:01:51 2017
 """
 
 import dpu.scripts as dpu
+from dpu.file_locator import FileLocator
 from datetime import datetime
 import pandas as pd
 import numpy as np
@@ -709,16 +710,19 @@ def stacked_bar_cohort (df, year=None, quarter_list=None, sortby='campus'):
 )
 def main(max_year, min_year):
     '''Main function.'''
+    FL= FileLocator()
     today = datetime.today()
     # If the user did not pass a max_year, use current year
     if not max_year:
         max_year = str(today.max_year)
         
     # Gather list of yearly IL pass rates
-    IL_Competitors = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\\Illinois Yearly Pass Rates for All Schools\\CompetitorPassRates.xlsx', sheet_name='Sheet1', header=0)
+    il_path = os.path.abspath(os.path.join(os.sep, FL.nclex, 'Illinois Yearly Pass Rates for All Schools', 'CompetitorPassRates.xlsx'))
+    IL_Competitors = pd.read_excel(il_path, sheet_name='Sheet1', header=0)
     
     # DPU NCLEX pass data
-    NCLEX = pd.read_excel('W:\\csh\\Nursing Administration\\Data Management\\DataWarehouse\\OG_Data\\NCLEX_Results\\NCLEX.xlsx',header=0,converters={'Empl ID':str, 'Year':str})
+    f_path = os.path.abspath(os.path.join(os.sep, FL.nclex, 'NCLEX.xlsx'))
+    NCLEX = pd.read_excel(f_path, header=0, converters={'Empl ID':str, 'Year':str})
     #Fill first zero where needed
     NCLEX['Empl ID'] = NCLEX['Empl ID'].str.zfill(7)
     #Drop unnecessary fields
@@ -733,7 +737,8 @@ def main(max_year, min_year):
     NCLEX = NCLEX[NCLEX['Repeater'] == 'No']
     
     # Read Grad Data
-    f = dpu.get_latest('W:/csh/Nursing Administration/Data Management/DataWarehouse/OG_Data/NSG_GRADS', 'NSG_GRAD_REVISED')
+    g_path = os.path.abspath(os.path.join(os.sep, FL.grad))
+    f = dpu.get_latest(g_path, 'NSG_GRAD_REVISED')
     Grad_data = pd.read_excel(f, skiprows=0, header=1, na_values='nan', converters={'ID':str, 'Admit Term':str, 'Compl Term': str})
     # Drop students in the wrong degree program (students who take more than
     # one program will be duplicated unnecessarily).
@@ -788,7 +793,8 @@ def main(max_year, min_year):
             ]
     
     # Open a PDF file
-    with PdfPages('W:\\csh\\Nursing Administration\\Data Management\\NCLEX Improvement Plan\Reports\\NCLEX_Charts {}.pdf'.format(today.strftime('%Y-%m-%d'))) as pdf:
+    o_path = os.path.abspath(os.path.join(os.sep, FL.nclex, 'Reports', 'NCLEX_Charts {}.pdf'.format(today.strftime('%Y-%m-%d'))))
+    with PdfPages(o_path) as pdf:
         # Write all the figures to file
         for graph in graphs:
             pdf.savefig(graph)
