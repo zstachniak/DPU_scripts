@@ -349,3 +349,52 @@ def true_date (date, day_of_week, date_is_max=False, **kwargs):
     else:
         # Return date with timedelta applied
         return date + timedelta(days=delta)
+
+def check_if_dir_is_empty (folder_path):
+    '''A simple check to see if a directory is empty. Returns T/F'''
+    # Walk through directory
+    for root, dirs, files in os.walk(folder_path):
+        # If files or directories exist, return False
+        if files or dirs:
+            return False
+        # Else, return True
+        else:
+            return True
+
+def empty_dir(folder_path):
+    '''Delete all contents of a directory. Based on https://stackoverflow.com/questions/185936/how-to-delete-the-contents-of-a-folder-in-python.'''
+    # Make sure you don't make a big mistake
+    if (folder_path == '/' or folder_path == "\\"):
+        return
+    else:
+        # Walk through directory
+        for root, dirs, files in os.walk(folder_path, topdown=False):
+            # Remove all files first
+            for name in files:
+                os.remove(os.path.join(root, name))
+            # Then remove and directories
+            for name in dirs:
+                os.rmdir(os.path.join(root, name))
+
+def ensure_empty_dir (folder_path):
+    '''Wrapper function to ensure that a directory exists and is empty.'''
+    # Check if staging dir exists
+    if os.path.isdir(folder_path):
+        # If exists, check that staging dir is empty
+        if not check_if_dir_is_empty(folder_path):
+            # If not empty, empty it
+            empty_dir(folder_path)
+    # Make directory if doesn't exist
+    else:
+        os.mkdir(folder_path)
+
+def merge_PDFs (files, output_path):
+    '''Merges order list of PDF file names into a single file.'''
+    # Initialize PdfFileMerger class
+    merger = PdfFileMerger()
+    # Cycle through and add PDFs to merger
+    for file in files:
+        merger.append(file)
+    # Write as single PDF
+    merger.write(output_path)
+    merger.close()
