@@ -10,6 +10,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from fuzzywuzzy import fuzz, process
 from dpu.file_locator import FileLocator
+from PyPDF2 import PdfFileMerger
 FL = FileLocator()
 #############################################################
 # Functions
