@@ -14,6 +14,7 @@ import click
 import re
 import dpu.scripts as dpu
 from dpu.file_locator import FileLocator
+from win32com import client
 
 #############################################################
 # Functions
@@ -586,43 +587,218 @@ def chart_wrapper (Most_Recent_FY_Schedule, Most_Recent_Faculty, FYHistory, Most
 # With the function below, we iterate through all current faculty and 
 # output their schedule for the fiscal year given.
 '''
-
-def output_faculty_schedule (output_path, current_faculty_df, FY_df, FY_year_list=None):
+def output_faculty_schedule (output_path, sched_dict, FY_df, FY_year_list):
     '''For each faculty member in the provided current_faculty_df, function
     will collect all teaching assignments in the FY_year_list, then output
     those assignments to an excel file.
     '''
+    # Order and sizing of columns for report
+    col_order = [('Term', 20),
+                 ('Cr', 6),
+                 ('Sec', 6),
+                 ('Type', 7),
+                 ('Time', 20),
+                 ('Mode', 8),
+                 ('Faculty', 20),
+                 ('TE', 6),
+                 ('Program', 10),
+                 ('Notes', 40),]
 
-    # This is the current Date, which will be appended to the Path
-    Date = datetime.now().strftime("%Y-%m-%d")
+    # Order and sizing of columns for report
+    wkl_order = [('Base TE', 10),
+                 ('Scholarship Release', 19),
+                 ('Admin Release', 14),
+                 ('Additional TE Changes', 21),
+                 ('Adjusted TE Target', 17),
+                 ('Actual TE', 10),
+                 ('Variance', 10),
+                 ('Notes', 40),]
     
-    # Create a list of terms to query, based on Fiscal Year provided
-    term_list = TermDescriptions[TermDescriptions['Fiscal Year'].isin(FY_year_list)]['Term']
+    text_blobs = ["The following represents your projected workload for the next fiscal year (Summer through Spring). Your projected workload is determined by your program director. You are not required to take any action at this time, but we do ask faculty to review their workload and detailed course assignments carefully. If you have any questions or concerns, please contact your program director.",
+              "Workload is measured in 'Teaching Equivalencies' or 'TEs.' In general, 1 TE is equal to teach a single four-quarter hour course. For courses with multiple components (e.g. Lecture, Lab, Clinical), workload is broken down based on the ratios previously determined for lecture to clinical to lab. 'Prog.' refers to the program for which you are teaching the course. We must track this for budgetary reasons, but it does not affect workload.",
+              "All full-time faculty are considered to have a base workload of 9 TEs. Tenure-Track faculty receive a 3 TE reduction for scholarship and all Advanced Practice Nurse full-time faculty receive a 1 TE reduction for practice. Faculty who hold administrative positions may receive additional recurring release time based on what was negotiated with the Dean’s office. In cases where there was a non-zero workload balance in the previous year, an adjustment will be made to the next year and will be reflected in the 'Additional TE Changes' column. In other rare circumstances, one-time TE modifications may be granted (e.g. faculty granted leave for one quarter). After all changes to the base workload have been applied, the projected workload for the year is then subtracted to determine any variance. You can see this calculation in the top row on the right of the workload calculations. A green '0.00' under Variance TE is a good thing! Low values of variance may be carried over to the next year (whether positive or negative). High values should be discussed with your program director.",
+              "Please review your course assignment and schedule for the upcoming quarters. Although we are limited in our ability to shift course times, please contact your program director if you foresee issues or wish to discuss modifications.", 
+              "The majority of all courses have a 'preferred teaching modality,' either face-to-face, hybrid, or online. Preferred modality is determined by the program director, and modality may vary across programs for a single course (e.g. NSG 540 is taught in all three programs). There may be cases where a preferred modality has not been established, in which case you will see an abbreviation for 'unknown.'",
+              "The preferred modality for your courses can be found in the 'Mode' column of your course assignments. If an instructor wishes to teach in a modality other than the preferred modality, the instructor must request approval from the program director.",
+              "For courses in which a D2L course master exists, the course master will automatically be copied over to your section in D2L. A master course is developed to be taught in a particular modality (online, hybrid, or face-to-face) and integrates best practices in instructional design, content expertise, and extensive teaching experience. The master course contains a syllabus, course readings, videos, assignments, and rubrics. Instructors have the freedom to edit their course as they see fit. If an instructor has questions about course masters, or wishes to know what is contained in a course master, please contact Lisa Torrescano.",
+              ]
+    
+    # Get current fiscal year
+    FY_year = FY_year_list[-1]
+    
+    # Get current faculty df
+    current_faculty_df = sched_dict[FY_year]['faculty']
     
     # Initiatlize a term dictionary for easier representation
     term_dict = dict(zip(TermDescriptions['Term'], TermDescriptions['Long Description']))
+    
+    # Ensure empty output paths
+    expected_path = os.path.abspath(os.path.join(os.sep, output_path, FY_year))
+    excel_path = os.path.abspath(os.path.join(os.sep, expected_path, 'tables'))
+    dpu.ensure_empty_dir(expected_path)    
+    dpu.ensure_empty_dir(excel_path)
+    
+    sheet_names = ['Workload Projection']
 
     # Iterate through all current faculty
     for faculty in current_faculty_df['Name']:
-        # Create a df for each faculty
-        faculty_df = FY_df[(FY_df['Faculty'] == faculty) & (FY_df['Term'].isin(term_list))]
-        # Drop unneeded columns
-        faculty_df = faculty_df[['Term', 'Cr', 'Sec', 'Type', 'Time', 'Mode', 'Faculty', 'TE', 'Program', 'Notes']]
-        # Map term to long description for easier representation
-        faculty_df['Term'] = faculty_df['Term'].map(term_dict)
+        # Gather workload data
+        wrkld = current_faculty_df[current_faculty_df['Name'] == faculty].copy(deep=True)
+        wrkld.drop(labels=['Name', 'Track', 'APN', 'Program', 'Contract', "Thelma's Notes"], axis=1, inplace=True)
         
-        # If path does not exist, make path
-        expected_path = os.path.abspath(os.path.join(os.sep, output_path, 'Tables', FY_year_list[0], Date))
-        if not os.path.exists(expected_path):
-            os.makedirs(expected_path)
-        '''
-        if not os.path.exists('{0}\\Tables\\{1}\\{2}\\'.format(output_path, FY_year_list[0], Date)):
-            os.makedirs('{0}\\Tables\\{1}\\{2}\\'.format(output_path, FY_year_list[0], Date))
-        '''
-        # Write out to excel
-        full_file_name = os.path.abspath(os.path.join(os.sep, expected_path, faculty)) + '.xlsx'
-        faculty_df.to_excel(full_file_name, sheet_name='Workload Projection')
-        #        '{0}\\Tables\\{1}\\{2}\\{3}.xlsx'.format(output_path, FY_year_list[0], Date, faculty), sheet_name='Workload Projection')
+        # File name
+        full_file_name = os.path.abspath(os.path.join(os.sep, excel_path, faculty)) + '.xlsx'
+        # Initialize a writer
+        writer = pd.ExcelWriter(full_file_name, engine='xlsxwriter')
+        
+        # Write to excel starting on nonzero row
+        startrow = 3
+        wrkld.to_excel(writer, index=False, sheet_name='Workload Projection', startrow=startrow)
+            
+        # Access the worksheet
+        workbook = writer.book
+        worksheet = writer.sheets['Workload Projection']
+        
+        # Page formatting (landscape, narrow margins, fit to one page)
+        worksheet.set_landscape()
+        worksheet.set_margins(left=0.3, right=0.3, top=0.6, bottom=0.3)
+        worksheet.fit_to_pages(1, 1)
+        
+        # Set Header and Footer
+        worksheet.set_header('&L{}&CProjected Workload for {}&R&D'.format(faculty, FY_year))
+        worksheet.set_footer('&CPage &P of &N')
+
+        # Formatters
+        wrap_text = workbook.add_format({'text_wrap': 1, 'align': 'center', 'valign': 'center'})
+        top_row = workbook.add_format({'text_wrap': 1, 'valign': 'top', 'bold': True, 'bottom': True})
+        merge_format = workbook.add_format({'text_wrap': 1, 'valign': 'top'})
+        merge_heading = workbook.add_format({'text_wrap': 1, 'valign': 'top', 'bold': True})
+        # Light red fill with dark red text.
+        red = workbook.add_format({'bg_color': '#FFC7CE',
+                                       'font_color': '#9C0006'})
+        # Green fill with dark green text.
+        green = workbook.add_format({'bg_color': '#C6EFCE',
+                                       'font_color': '#006100'})
+        
+        # Set column sizes
+        for i, col in enumerate(wkl_order):
+            c = dpu.char_counter_from_int(i)
+            worksheet.set_column('{0}:{1}'.format(c, c), col[1])
+        
+        # Define our range(s) for color formatting
+        number_rows = len(wrkld.index)
+        variance_range = "G{}:G{}".format(startrow + 2, startrow + 1 + number_rows)
+
+        # Highlight Overages or Underages in red
+        worksheet.conditional_format(variance_range, {'type': 'cell',
+                                                       'criteria': 'equal to',
+                                                       'value': 0,
+                                                       'format': green})
+        worksheet.conditional_format(variance_range, {'type': 'cell',
+                                                       'criteria': 'not equal to',
+                                                       'value': 0,
+                                                       'format': red})
+                
+        # Set height and formatting of data
+        worksheet.set_row(startrow + 1, 30, wrap_text)
+        
+        # Insert and merge text
+        last_col = dpu.char_counter_from_int( len(wkl_order) -1 )
+        worksheet.merge_range('A1:{}1'.format(last_col), 'Projected Workload', merge_heading)
+        worksheet.set_row(1, 45)
+        worksheet.merge_range('A2:{}2'.format(last_col), text_blobs[0], merge_format)
+        
+        worksheet.set_row(6, 45)
+        worksheet.merge_range('A7:{}7'.format(last_col), text_blobs[1], merge_format)
+        
+        worksheet.set_row(8, 105)
+        worksheet.merge_range('A9:{}9'.format(last_col), text_blobs[2], merge_format)
+        
+        worksheet.set_row(10, 30)
+        worksheet.merge_range('A11:{}11'.format(last_col), text_blobs[3], merge_format)
+        
+        worksheet.merge_range('A13:{}13'.format(last_col), 'Course Modalities', merge_heading)
+        worksheet.set_row(13, 45)
+        worksheet.merge_range('A14:{}14'.format(last_col), text_blobs[4], merge_format)
+        worksheet.set_row(15, 30)
+        worksheet.merge_range('A16:{}16'.format(last_col), text_blobs[5], merge_format)
+        
+        worksheet.merge_range('A18:{}18'.format(last_col), 'Course Masters', merge_heading)
+        worksheet.set_row(18, 45)
+        worksheet.merge_range('A19:{}19'.format(last_col), text_blobs[6], merge_format)
+        
+        # Iterate over fiscal years
+        for FY, indication in zip(reversed(FY_year_list[-2:]), ['Projected', 'Previously Taught']):
+            # Create a list of terms to query, based on Fiscal Year
+            term_list = TermDescriptions[TermDescriptions['Fiscal Year'] == FY]['Term']
+            # Create a df for each faculty
+            faculty_df = FY_df[(FY_df['Faculty'] == faculty) & (FY_df['Term'].isin(term_list))]
+            # Drop unneeded columns
+            faculty_df = faculty_df[['Term', 'Cr', 'Sec', 'Type', 'Time', 'Mode', 'Faculty', 'TE', 'Program', 'Notes']]
+            # Map term to long description for easier representation
+            faculty_df['Term'] = faculty_df['Term'].map(term_dict)
+        
+            # Sheet name
+            sheet_name = '{} Courses'.format(FY)
+            sheet_names.append(sheet_name)
+            # Write current year data
+            faculty_df.to_excel(writer, index=False, sheet_name=sheet_name)
+            # Access the worksheet
+            worksheet = writer.sheets[sheet_name]
+            
+            # Page formatting (landscape, narrow margins, fit to one page)
+            worksheet.set_landscape()
+            worksheet.set_margins(left=0.3, right=0.3, top=0.6, bottom=0.3)
+            worksheet.fit_to_pages(1, 1)
+            
+            # Set Header and Footer
+            worksheet.set_header('&L{}&C{} Courses for {}&R&D'.format(faculty, indication, FY))
+            worksheet.set_footer('&CPage &P of &N')
+            
+            # Set column sizes
+            for i, col in enumerate(col_order):
+                c = dpu.char_counter_from_int(i)
+                worksheet.set_column('{0}:{1}'.format(c, c), col[1])
+    
+            # Freeze panes on top row
+            worksheet.freeze_panes(1, 0)
+            # Apply autofilters
+            number_rows = len(faculty_df.index)
+            worksheet.autofilter('A1:{0}{1}'.format(dpu.char_counter_from_int(len(col_order) - 1), number_rows+1))
+            
+            # Set column sizes
+            for i, col in enumerate(col_order):
+                worksheet.write(0, i, col[0], top_row)
+
+        # Apply changes
+        writer.save()
+        
+        # Convert the excel file to PDF
+        
+        convert_excel_to_pdf(excel_path, expected_path, faculty, sheet_names=sheet_names)
+  
+def convert_excel_to_pdf (input_path, output_path, file_name, sheet_names):
+    '''A function to handle conversion of excel to PDF.'''
+    # Connect file_name to path_name
+    excel_file_name = os.path.abspath(os.path.join(os.sep, input_path, file_name)) + '.xlsx'
+    pdf_file_name = os.path.abspath(os.path.join(os.sep, output_path, file_name)) + '.pdf'
+    # Call excel client as invisible
+    excel = client.Dispatch("Excel.Application")
+    excel.Visible = 0
+    # Open the Excel workbook
+    wb = excel.Workbooks.Open(excel_file_name)
+    # Open all sheets
+    wb.Worksheets(sheet_names).Select()
+    # Set PDF output variables
+    xlTypePDF = 0
+    xlQualityStandard = 0
+    # Export to PDF
+    excel.ActiveSheet.ExportAsFixedFormat(xlTypePDF, pdf_file_name, xlQualityStandard, True, True)
+    # Close the workbook and quit Excel
+    wb.Close(False)
+    excel.Quit()
+    wb = None
+    excel = None
 
 #############################################################
 # Main Function Call
@@ -646,7 +822,7 @@ def main(fy):
     #Read in term descriptions
     TermDescriptions = dpu.get_term_descriptions()
     # Simplify years for easier access
-    years = TermDescriptions[['Academic Year', 'Fiscal Year']]
+    years = TermDescriptions[['Academic Year', 'Fiscal Year']].copy(deep=True)
     years.drop_duplicates(subset=['Fiscal Year'], keep='first', inplace=True)
     
     #Set abbreviations for course types
@@ -731,7 +907,8 @@ def main(fy):
     # Output charts and faculty schedule for highest two fiscal years
     for year in fiscal_years[-2:]:
         chart_wrapper(sched_dict[year]['schedule'], sched_dict[year]['faculty'], FYHistory, sched_dict[year]['folder'])
-        output_faculty_schedule(FL.faculty_workload, sched_dict[year]['faculty'], FYConcat, FY_year_list=[year])
+        
+    output_faculty_schedule(FL.faculty_workload, sched_dict, FYConcat, fiscal_years)
 
 if __name__ == "__main__":
     main()
