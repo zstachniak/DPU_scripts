@@ -23,100 +23,14 @@ import re
 from time import sleep
 import errno
 import pyodbc
-from fuzzywuzzy import fuzz, process
 import click
 import openpyxl
+import dpu.scripts as dpu
+from dpu.file_locator import FileLocator
 
 #############################################################
 # Functions
 #############################################################
-def find_best_string_match (query, choices, **kwargs):
-    '''This function takes a single query and a list of possible
-    choices and ranks the choices to find the most likely match.
-    Rankings are calculated via fuzzywuzzy ratios, and can be
-    passed directly by the user via optional keyword.'''
-    # Optional argument to test only certain scorers
-    scorers = kwargs.pop('scorers', [fuzz.ratio, fuzz.partial_ratio, fuzz.token_sort_ratio, fuzz.token_set_ratio])
-    # Initialize a dictionary to store scoring
-    score_mapping = {}
-    for key in choices:
-        score_mapping[key] = []
-    # Test for each scorer
-    for scorer in scorers:
-        # Store temporary results as list of tuples
-        temp_results = process.extract(query, choices, scorer=scorer, limit=None)
-        # Add scores to mapping
-        for (key, score) in temp_results:
-            score_mapping[key].append(score)
-    # Sum all results for each key
-    for key in score_mapping.keys():
-        score_mapping[key] = sum(score_mapping[key])
-    # Determine the maximum scored
-    result = max(score_mapping, key=lambda key: score_mapping[key])
-    return result
-
-def get_dir_paths (pathname, pattern, ignore_list):
-    '''Given a starting pathname and a pattern, function will return
-    and subdirectories that match the regex pattern.'''
-    dirs = []
-    # Iterate through subfiles
-    for name in os.listdir(pathname):
-        subname = os.path.join(pathname, name)
-        # Checks if subpath is a directory and that it matches pattern
-        if os.path.isdir(subname) and re.fullmatch(pattern, name) and name not in ignore_list:
-            dirs.append(subname)
-    return dirs
-
-def get_latest (pathname):
-    '''Scans the folder for all files that match typical naming conventions.
-    For those files, function parses file name to look for date edited,
-    then returns the file name with the latest date.'''
-    
-    #print('Scanning: {}'.format(pathname))
-    
-    #Set up empty lists
-    files = []
-    dates = []
-    
-    for name in os.listdir(pathname):
-        subname = os.path.join(pathname, name)
-        
-        #Checks for standard naming conventions and ignores file fragments
-        if os.path.isfile(subname) and 'Clinical Roster' in subname and '~$' not in subname:
-            #Ignore files that end in '_(2).xlsx'
-            if (subname[(subname.find('.')-3):subname.find('.')]) == '(2)':
-                pass
-            else:
-                files.append(subname)
-    
-    #If only one file, return that one
-    if len(files) == 1:
-        return files[0]
-    
-    #If multiple files, return the one that contains the latest date
-    else:
-        #Parses file names and converts to datetimes
-        for subname in files:
-            date = subname[(subname.find('.')-10):subname.find('.')]
-            date_time = datetime.strptime(date, '%Y-%m-%d').date()
-            dates.append(date_time)
-            #print('Adding: {}'.format(subname))
-        latest = max(dates)
-        #print(latest.strftime('%m-%d-%Y'))
-        for file in files:
-            if str(latest.strftime('%Y-%m-%d')) in file:
-                return file
-
-def remove_files (folder):
-    '''Removes all files in a given folder.'''
-    for file in os.listdir(folder):
-        file_path = os.path.join(folder, file)
-        try:
-            if os.path.isfile(file_path):
-                os.unlink(file_path)
-        except Exception as e:
-            print(e)
-
 def send_email (recipient, subject, body, attachments):
     '''Sends email using the Outlook client'''
     outlook = win32.Dispatch('outlook.application')
@@ -132,11 +46,13 @@ def send_email (recipient, subject, body, attachments):
 def email_preceptor (row):
     '''Emails each preceptor in the file.'''
     # Set save path
-    ending_path = 'W:\\csh\\Nursing\\Affiliation Agreements'
+    FL = FileLocator()
+    ending_path = FL.contracts
     #Read in term descriptions
-    TermDescriptions = pd.read_excel('W:\\csh\\Nursing\\Schedules\\Term Descriptions.xlsx', header=0, converters={'Term':str})
+    TermDescriptions = dpu.get_term_descriptions()
     # Set path for attachment
-    duties = 'W:\\csh\\Nursing\\Preceptor-Mentor Requests\\MENP\\Preceptor, Student, and Faculty Responsibilities for MENP Program.pdf'
+    FL.preceptor
+    duties = os.path.abspath(os.path.join(os.sep, FL.preceptor, 'MENP', 'Preceptor, Student, and Faculty Responsibilities for MENP Program.pdf'))
     
     # Get coordinator's email
     recipient = row['Preceptor Email']
@@ -195,16 +111,19 @@ def email_preceptor (row):
     else:
         # Test if org is an abbreviation
         if re.match(r'^[A-Z]+$', row['Clinical Site']):
-            org = find_best_string_match(row['Clinical Site'], abbr)
+            org = dpu.find_best_string_match(row['Clinical Site'], abbr)
             # It is possible for multiple sites to share an abbreviation
             # If this happens, we can attempt to use the recipient email
             email_org = re.findall(r'@(\w+)\.', recipient)[0]
-            org = find_best_string_match(email_org, org)
+            org = dpu.find_best_string_match(email_org, org)
         else:
-            org = find_best_string_match(row['Clinical Site'], sites)
-    
+            org = dpu.find_best_string_match(row['Clinical Site'], sites)
+
     # Save a copy of the email
-    save_path = ending_path + '\\' + org + '\\' + 'Preceptor Letters of Agreement' + '\\' + TermDescriptions.loc[TermDescriptions['Term'] == row['Term'], 'Academic Year'].item() + '\\' + TermDescriptions.loc[TermDescriptions['Term'] == row['Term'], 'Quarter'].item()   
+    save_ay = TermDescriptions.loc[TermDescriptions['Term'] == row['Term'], 'Academic Year'].item()
+    save_q = TermDescriptions.loc[TermDescriptions['Term'] == row['Term'], 'Quarter'].item()
+    save_path = os.path.abspath(os.path.join(os.sep, ending_path, org, 'Preceptor Letters of Agreement', save_ay, save_q))
+    
     title = row['Preceptor Last Name'] + ', ' + row['Preceptor First Name']
     # Sleep for 1 second to allow time for Outlook to refresh
     sleep(1)
@@ -233,10 +152,11 @@ def save_email (folder, save_path, title):
 def get_sites_from_ARC ():
     '''A function that connects to the ARC Access database and grabs all
     site / corporation pairings.'''
+    FL = FileLocator()
     # Access Connection Strings
     access_conn_str = (
         r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
-        r'DBQ=W:\\csh\\Nursing\\Agreement Request Center (ARC)\\Backend\\AffiliationAgreements_Backend.accdb;'
+        r'DBQ={0};'.format(os.path.abspath(os.path.join(os.sep, FL.arc, 'Backend', 'AffiliationAgreements_Backend.accdb')))
         )
     # Connect and open cursor
     cnxn = pyodbc.connect(access_conn_str)
@@ -278,40 +198,20 @@ def save_excel_changes (file):
 #############################################################
 @click.command()
 @click.option(
-        '--path',
-        help='Folder path to current quarter, e.g. "2017-2018\Winter"',
+        '--term', '-t', type=str,
+        help='Term for which to send out preceptor emails',
 )
-def main(path):
+def main(term):
     '''Main function.'''
     # Make a global list to store jobs completed
     global jobs_completed
     jobs_completed = []
-    # Initial path
-    starting_path = 'W:\\csh\\Nursing Administration\\Clinical Placement Files'
-    quarters = ['Fall', 'Winter', 'Spring', 'Summer']
-    # If user supplied a path, join it to the starting path
-    if path:
-        starting_path = os.path.join(starting_path, path)
-    # Else, determine the correct path
-    else:
-        # Get all directories that match regex
-        subfolders = [f.name for f in os.scandir(starting_path) if f.is_dir() and re.match(r'\d{4}-\d{4}', f.name)]
-        # Sort the directories
-        subfolders.sort()
-        # Assume correct academic year is the last one
-        ay = subfolders[-1]
-        starting_path = os.path.join(starting_path, ay)
-        # Now search for correct quarter
-        subfolders = [f.name for f in os.scandir(starting_path) if f.is_dir()]
-        # Assume last quarter is correct one
-        for q in reversed(quarters):
-            if q in subfolders:
-                break
-        starting_path = os.path.join(starting_path, q)
     
-    # Read in latest preceptors file
-    file = get_latest(starting_path)
-    preceptors = pd.read_excel(file, header=0, converters={'Term':str, 'Cr':str, 'Empl ID':str, 'Hours':str})
+    # If user did not pass a term, guess current
+    if not term:
+        term = dpu.guess_current_term()
+    # Get preceptors
+    preceptors, file = dpu.get_cln(term, dpu.get_term_descriptions())
     # Drop any rows without a preceptor email
     preceptors.dropna(subset=['Preceptor Email'], inplace=True)
     # Drop any rows with "TBD" as preceptor email
