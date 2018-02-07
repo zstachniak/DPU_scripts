@@ -452,3 +452,18 @@ def merge_PDFs (files, output_path):
     # Write as single PDF
     merger.write(output_path)
     merger.close()
+    
+def rank_apply (row, cols, rank):
+    '''Pandas apply function to return item with correct rank.'''
+    for item in cols:
+        if row[item] == rank:
+            return item
+
+def rank_it (df, cols_to_rank, rank_range_max):
+    '''A function to assist in clinical preferences where students rank
+    something via Qualtrics. Qualtrics will return each item as a separate
+    column, but we want Rank 1: Value, etc.'''
+    # Iterate through the rankings and report correct item
+    for rank in range(1, rank_range_max + 1):
+        df['Ranked {}'.format(rank)] = df.apply(rank_apply, axis=1, args=(cols_to_rank, rank))
+    return df
