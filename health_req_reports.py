@@ -33,12 +33,16 @@ def apply_dates_times (row, internships, roster_type='student'):
     time range.'''
     # If internship
     if row['Cr'] == '443' and roster_type == 'student':
-        # Gather dates from internship document
-        dates = internships[internships['Student ID'] == row['Student ID']]['Date'].item().split('-')
-        # Process and format
-        dates = [datetime.strptime(x.strip(), '%m/%d/%y') for x in dates]
-        dates = '{} - {}'.format(*map(date_format, dates))
-        times = None
+        try:
+            # Gather dates from internship document
+            dates = internships[internships['Student ID'] == row['Student ID']]['Date'].item().split('-')
+            # Process and format
+            dates = [datetime.strptime(x.strip(), '%m/%d/%y') for x in dates]
+            dates = '{} - {}'.format(*map(date_format, dates))
+            times = None
+        except:
+            dates = None
+            times = None
     # For all others
     else:
         # Gather Meeting Pattern
@@ -742,10 +746,11 @@ def main (prev_date):
             raise ValueError('Date provided is in a valid format, but compliance files do not exist using that date.')
     else:
         num_files = 2
-
+    print()
     # Get the latest reports
-    noncompliant_files = dpu.get_latest(os.path.join(FL.health_req_report, 'Downloaded Reports'), 'Noncompliant', num_files=num_files)
-    compliant_files = dpu.get_latest(os.path.join(FL.health_req_report, 'Downloaded Reports'), 'Compliant', num_files=num_files)
+    
+    noncompliant_files = dpu.get_latest(FL.health_req_cb_downloads, 'Noncompliant', num_files=num_files)
+    compliant_files = dpu.get_latest(FL.health_req_cb_downloads, 'Compliant', num_files=num_files)
     
     if prev_date:
         # Add previous files
@@ -765,7 +770,7 @@ def main (prev_date):
     noncompliant_changelog = pd.merge(noncompliant_curr, noncompliant_prev, on=noncompliant_curr.columns.tolist(), how='outer', indicator=True).query("_merge != 'both'").drop('_merge', 1)
     compliant_changelog = pd.merge(compliant_curr, compliant_prev, on=compliant_curr.columns.tolist(), how='outer', indicator=True).query("_merge != 'both'").drop('_merge', 1)
     # Get next action date file
-    nad_file = dpu.get_latest(os.path.join(FL.health_req_report, 'Downloaded Reports'), 'Next_Action_Date', num_files=1)
+    nad_file = dpu.get_latest(FL.health_req_cb_downloads, 'Next_Action_Date', num_files=1)
     to_datetime = lambda d: datetime.strptime(d, '%m/%d/%Y')
     to_string = lambda d: datetime.strftime(d, '%m/%d/%Y')
     next_action_date = pd.read_csv(nad_file, header=0, converters={'Order Submission Date': to_datetime, 'Requirement Due Date': to_datetime})
