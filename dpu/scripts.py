@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from fuzzywuzzy import fuzz, process
 from dpu.file_locator import FileLocator
 from PyPDF2 import PdfFileMerger
+
 FL = FileLocator()
 #############################################################
 # Functions
@@ -40,7 +41,7 @@ def get_latest (pathname, filename, **kwargs):
     if verbose:
         print('Checking {}...'.format(pathname))
     # Iterate through objects in directory
-    for name in os.listdir(pathname):
+    for name in os.scandir(pathname):
         # Concatenate the path with the object name
         subname = os.path.join(pathname, name)
         # Split into name and extension
