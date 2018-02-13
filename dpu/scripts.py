@@ -182,7 +182,18 @@ def get_schedule (term, TermDescriptions):
     schedule = pd.read_excel(file, sheet_name=q, header=0,converters={'Cr':str, 'Term':str})
     return schedule
 
+def get_student_list ():
+    '''Simple function to gather latest student list.'''
+    # Define schedule starting path
+    starting_path = FL.students
+    # Find most recent
+    file = get_latest(starting_path, 'Student List')
+    # Read data
+    students = pd.read_excel(file, header=0, converters={'Emplid':str, 'Admit Term':str, 'Latest Term Enrl': str, 'Run Term': str,})
+    return students
+
 def get_student_roster ():
+    '''Simple function to gather student rosters (course registration).'''
     # Define schedule starting path
     starting_path = FL.rosters
     # Find most recent
