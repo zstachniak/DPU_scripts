@@ -132,6 +132,18 @@ def guess_current_term (TermDescriptions):
     term = TermDescriptions[(TermDescriptions['Academic Year'] == ay) & (TermDescriptions['Quarter'] == quarter)]['Term'].item()
     return term
 
+def get_class_data():
+    '''Function to gather class data.'''
+    # Starting Path
+    starting_path = FL.class_data
+    # Update file path
+    file = get_latest(starting_path, 'NSG_CLASS_SCHEDULE')
+    # Read data
+    class_data = pd.read_excel(file, skiprows=0, header=1, converters={'Term': str, 'Catalog':str, 'Section':str, 'ID':str})
+    # Remove extra space in course numbers
+    class_data['Catalog'] = class_data['Catalog'].apply(lambda x: x.strip())
+    return class_data
+
 def get_cln (term, TermDescriptions, return_location=False):
     '''A function to gather clinical rosters from path & term.'''
     # Starting Path
