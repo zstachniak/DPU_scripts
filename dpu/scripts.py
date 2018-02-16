@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from fuzzywuzzy import fuzz, process
 from dpu.file_locator import FileLocator
 from PyPDF2 import PdfFileMerger
+from sqlite3 import OperationalError
 
 FL = FileLocator()
 #############################################################
@@ -491,3 +492,34 @@ def rank_it (df, cols_to_rank, rank_range_max):
     for rank in range(1, rank_range_max + 1):
         df['Ranked {}'.format(rank)] = df.apply(rank_apply, axis=1, args=(cols_to_rank, rank))
     return df
+
+def insert_new (cursor, table_name, data):
+    '''Inserts list of values into table (no checks on positions)'''
+    placeholders = ", ".join(["?" for x in range(len(data))])	
+    sql = "INSERT OR REPLACE INTO %s VALUES (%s);" % (table_name, placeholders)	
+    cursor.execute(sql, data)
+    
+def get_row (table_name, primary_key_name, primary_key_id, cursor):
+    '''Retrieves all table row data given a primary key.'''
+    try:
+        SQL = f"SELECT * FROM {table_name} WHERE {primary_key_name} = {primary_key_id}"
+        cursor.execute(SQL)
+        return cursor.fetchone()
+    except OperationalError as msg:
+        print ('Command skipped: ', msg)
+
+def drop_row (table_name, primary_key_name, primary_key_id, cursor):
+    '''Deletes a row from table.'''
+    SQL = f"DELETE FROM {table_name} WHERE {primary_key_name} = {primary_key_id}"
+    cursor.execute(SQL)
+    
+def update_table (table_name, primary_key_name, primary_key_id, field_name, field_value, cursor):
+    '''Updates a single field in a table.'''
+    SQL = f"UPDATE {table_name} SET {field_name} = '{field_value}' WHERE {primary_key_name} = {primary_key_id};"
+    cursor.execute(SQL)
+    
+def check_database_for_id (table_name, primary_key_name, primary_key_id, cursor):
+    '''Tests if primary key ID exists in a table.'''
+    SQL = f"SELECT COUNT(1) FROM {table_name} WHERE {primary_key_name} = {primary_key_id}"
+    cursor.execute(SQL)
+    return cursor.fetchone()[0]
