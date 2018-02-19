@@ -74,7 +74,7 @@ def email_preceptor (row):
     Sincerely,
     
     DePaul University
-    School of Nursing'''.format(row['Preceptor First Name'], row['Preceptor Last Name'], row['Preceptor First Name'], row['Student First Name'], row['Student Last Name'], row['Date'], row['Cr'], row['Sec'], row['Course Title'], row['Hours'], row['Student First Name'], row['Student Last Name'])
+    School of Nursing'''.format(row['Preceptor First Name'], row['Preceptor Last Name'], row['Preceptor First Name'], row['Student First Name'], row['Student Last Name'], row['Date'], row['Cr'], row['Sec'], row['Title'], row['Hours'], row['Student First Name'], row['Student Last Name'])
     
     # Get attachments    
     attachments = [duties]
