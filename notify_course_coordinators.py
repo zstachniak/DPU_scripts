@@ -112,30 +112,32 @@ def main(term):
     
     # Iterate through coordinators
     for coordinator in coord_faculty:
-        # Get coordinator's email
-        try:
-            recipient = Faculty[Faculty['Last-First'] == coordinator]['Primary Email'].astype(list).values[0]
-        except:
-            recipient = Faculty[Faculty['Last-First'] == coordinator]['Secondary Email'].astype(list).values[0]
-        # Write subject
-        subject = 'Course Coordinator: Your Clinical or Lab Faculty'
-        # Write body
-        body = '''Dear {},
-        
-        Attached please find a list of your clinical or lab courses along with faculty contact info. If there is no confirmation date listed for a faculty member (field = 'Fac Conf'), we do not recommend contacting that person at this time. They have likely only given us a tentative 'yes.'
-        
-        This is an automated email - if something looks wrong, please reply and let me know.'''.format(coordinator.split(',')[1].strip())
-        # Get attachments    
-        attachments = []
-        for file in os.listdir(output_path):
-            file_path = os.path.join(output_path, file)
-            if coordinator in file_path:
-                attachments.append(file_path)
-        # Send email
-        try:
-            send_email(recipient, subject, body, attachments)
-        except Exception as e:
-            print('Exception occured for {0}: {1}'.format(coordinator, e))
+        # Ignore undefined faculty
+        if coordinator not in ['TBA', 'TBD']:
+            # Get coordinator's email
+            try:
+                recipient = Faculty[Faculty['Last-First'] == coordinator]['Primary Email'].item()
+            except:
+                recipient = Faculty[Faculty['Last-First'] == coordinator]['Secondary Email'].item()
+            # Write subject
+            subject = 'Course Coordinator: Your Clinical or Lab Faculty'
+            # Write body
+            body = '''Dear {},
+            
+            Attached please find a list of your clinical or lab courses along with faculty contact info. If there is no confirmation date listed for a faculty member (field = 'Fac Conf'), we do not recommend contacting that person at this time. They have likely only given us a tentative 'yes.'
+            
+            This is an automated email - if something looks wrong, please reply and let me know.'''.format(coordinator.split(',')[1].strip())
+            # Get attachments    
+            attachments = []
+            for file in os.listdir(output_path):
+                file_path = os.path.join(output_path, file)
+                if coordinator in file_path:
+                    attachments.append(file_path)
+            # Send email
+            try:
+                send_email(recipient, subject, body, attachments)
+            except Exception as e:
+                print('Exception occured for {0}: {1}'.format(coordinator, e))
 
 if __name__ == "__main__":
     main()
