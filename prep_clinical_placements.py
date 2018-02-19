@@ -97,7 +97,7 @@ def output_report (df, column_names, file_name, date_of_report, output_path):
     worksheet.add_table('A1:{}{}'.format(dpu.char_counter_from_int(ncols - 1), nrows + 1), {'autofilter': 1, 'style': 'Table Style Light 1', 'header_row': 1, 'columns': header})
 
     # Freeze panes on top row and first 3 columns
-    worksheet.freeze_panes(1, 3)
+    worksheet.freeze_panes(1, 5)
     
     # Apply changes
     writer.save()
