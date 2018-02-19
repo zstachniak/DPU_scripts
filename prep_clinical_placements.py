@@ -151,7 +151,7 @@ def main (term):
     column_names = ['Term', 'Campus', 'Cr', 'Sec', 'Clinical Site', 'Unit', 'Dates', 'Times', 'Student ID', 'Student Last Name', 'Student First Name', 'Student Full Name', 'Student Email', 'Student Phone', 'Faculty ID', 'Faculty Last Name', 'Faculty First Name', 'Faculty Full Name', 'Faculty Primary Email', 'Faculty Secondary Email', 'Faculty Phone', 'Title', 'Max Cap', 'Confirmed']
         
     # Gather date
-    date_of_report = datetime.strptime(dpu.get_latest(FL.students_downloaded, 'NSG_Graduate_Students').rstrip('.xlsx')[-10:], '%Y-%m-%d')
+    date_of_report = datetime.strptime(dpu.get_latest(FL.rosters, 'NSG_STDNT_ROSTER').rstrip('.xlsx')[-10:], '%Y-%m-%d')
     
     # Ensure Output path
     starting_path = FL.cln_roster
